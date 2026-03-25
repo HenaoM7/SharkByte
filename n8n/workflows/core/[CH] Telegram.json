@@ -1,0 +1,237 @@
+{
+  "createdAt": "2026-03-23T00:00:00.000Z",
+  "updatedAt": "2026-03-23T00:00:00.000Z",
+  "id": "ch-telegram-v2",
+  "name": "[CH] Telegram",
+  "active": false,
+  "nodes": [
+    {
+      "id": "wh-tg",
+      "name": "Recibir Mensaje Telegram",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 304],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-handler",
+        "options": { "responseData": "allEntries", "responseCode": 200 }
+      },
+      "webhookId": "tg-handler-v2-001"
+    },
+    {
+      "id": "code-norm-tg",
+      "name": "Normalizar Payload TG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, 304],
+      "parameters": {
+        "jsCode": "var body = $input.first().json.body || $input.first().json;\nif (!body.tenantId || !body.senderId || !body.messageText) return [];\nif (body.platform !== 'telegram') return [];\nreturn [{ json: {\n  platform:'telegram', tenantId:body.tenantId,\n  senderId:String(body.senderId), senderName:body.senderName||'Cliente',\n  messageText:body.messageText, messageId:body.messageId||'',\n  timestamp:body.timestamp||Date.now(),\n  chatId:String(body.chatId||body.senderId), botToken:body.botToken||''\n}}];"
+      }
+    },
+    {
+      "id": "http-tenant-tg",
+      "name": "Buscar Config Tenant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [512, 304],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/internal/tenant/by-tenantid/' + $json.tenantId }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }] },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "if-found-tg",
+      "name": "Tenant Encontrado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [768, 288],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c1", "leftValue": "={{ $json.found }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "if-active-tg",
+      "name": "Tenant Activo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1024, 192],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c2", "leftValue": "={{ $json.isActive }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "http-channel-tg",
+      "name": "Obtener Credenciales TG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 192],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/internal/channels/' + $('Normalizar Payload TG').first().json.tenantId + '/telegram' }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }] },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "code-ctx-tg",
+      "name": "Construir Contexto IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1536, 192],
+      "parameters": {
+        "jsCode": "var msg=$('Normalizar Payload TG').first().json;\nvar tenant=$('Buscar Config Tenant').first().json;\nvar channel=$('Obtener Credenciales TG').first().json;\nif(!channel||!channel.found) throw new Error('[TG] Canal no configurado para tenant '+msg.tenantId);\nvar bc=tenant.businessConfig||{}; var refs=tenant.references||[];\nvar tz=(bc.businessHours&&bc.businessHours.timezone)?bc.businessHours.timezone:'America/Bogota';\nvar now=new Date();\nvar localTime=new Intl.DateTimeFormat('es-CO',{timeZone:tz,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);\nvar dayName=new Intl.DateTimeFormat('es-CO',{timeZone:tz,weekday:'long'}).format(now);\nvar schedule=(bc.businessHours&&bc.businessHours.schedule)?bc.businessHours.schedule:[];\nvar todaySchedule=schedule.find(function(d){return (d.day||'').toLowerCase()===dayName.toLowerCase();});\nvar parts=localTime.split(':'); var nowMins=parseInt(parts[0],10)*60+parseInt(parts[1],10);\nvar inHours=true;\nif(todaySchedule&&todaySchedule.isOpen){var op=(todaySchedule.open||'00:00').split(':');var cl=(todaySchedule.close||'23:59').split(':');inHours=nowMins>=(parseInt(op[0],10)*60+parseInt(op[1],10))&&nowMins<=(parseInt(cl[0],10)*60+parseInt(cl[1],10));}else if(todaySchedule&&!todaySchedule.isOpen){inHours=false;}\nvar catalogLines=(bc.catalog||[]).map(function(p){var l='- '+p.name;if(p.price)l+=' | $'+Number(p.price).toLocaleString('es-CO');if(p.category)l+=' | '+p.category;if(p.available===false)l+=' [NO DISPONIBLE]';if(p.description)l+=': '+p.description;return l;});\nvar faqLines=(bc.faq||[]).map(function(f){return 'P: '+f.question+'\\nR: '+f.answer;});\nvar refsText='';if(refs.length>0){refsText='\\n\\nFUENTES DE REFERENCIA:\\n';refs.forEach(function(r){refsText+='- ['+r.type.toUpperCase()+'] '+r.name+': '+r.url;if(r.description)refsText+=' — '+r.description;refsText+='\\n';});}\nvar classInstr='INSTRUCCION CRITICA: Al FINAL de tu respuesta SIEMPRE agrega:\\n<JSON>\\n{\"intent\":\"INTENT\",\"confidence\":SCORE}\\n</JSON>\\nINTENT: ventas|soporte|agendamiento|informacion|humano|fallback\\n\\n';\nvar rawSys=classInstr+'=== INSTRUCCIONES DEL NEGOCIO ===\\n'+(bc.aiInstructions||'Eres un asistente de atencion al cliente profesional y amable.')+'\\n\\nNegocio: '+(bc.businessName||'')+'\\nCanal: Telegram\\nTono: '+(bc.tone||'amigable')+'\\n\\nCATALOGO:\\n'+(catalogLines.length>0?catalogLines.join('\\n'):'Sin productos.')+'\\n\\nFAQ:\\n'+(faqLines.length>0?faqLines.join('\\n\\n'):'Sin FAQ.')+((bc.paymentMethods&&bc.paymentMethods.length>0)?'\\nMetodos de pago: '+bc.paymentMethods.join(', '):'')+refsText+'\\n\\nCliente: '+(msg.senderName||'Cliente');\nvar oe='{{';var ce='}}';\nvar systemMessage=rawSys.split('{').join(oe).split('}').join(ce);\n// botToken: preferir el almacenado en canal, fallback al enviado por webhook\nvar botToken=channel.botToken||msg.botToken||'';\nreturn [{json:{platform:'telegram',tenantId:msg.tenantId,senderId:msg.senderId,senderName:msg.senderName,message:msg.messageText,chatId:msg.chatId,botToken:botToken,inHours:inHours,outOfHoursMessage:bc.outOfHoursMessage||'Estamos fuera de horario. Te responderemos pronto.',systemMessage:systemMessage}}];"
+      }
+    },
+    {
+      "id": "if-horario-tg",
+      "name": "En Horario?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1792, 176],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c3", "leftValue": "={{ $json.inHours }}", "rightValue": false, "operator": { "type": "boolean", "operation": "false" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "http-fuera-tg",
+      "name": "Enviar Fuera de Horario TG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2048, 96],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $json.botToken + '/sendMessage' }}",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id:$json.chatId, text:$json.outOfHoursMessage }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "agent-tg",
+      "name": "Agente IA Telegram",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [2048, 304],
+      "parameters": {
+        "agent": "conversationalAgent", "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": { "systemMessage": "={{ $json.systemMessage }}" }
+      },
+      "alwaysOutputData": true, "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-tg",
+      "name": "OpenAI Telegram",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [1984, 496],
+      "parameters": {
+        "model": { "__rl": true, "value": "gpt-4o", "mode": "list", "cachedResultName": "gpt-4o" },
+        "options": { "temperature": 0.4, "maxTokens": 800 }
+      },
+      "credentials": { "openAiApi": { "id": "openai-creds", "name": "OpenAI SharkByte" } }
+    },
+    {
+      "id": "memory-tg",
+      "name": "Memoria Conversacion TG",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [2112, 496],
+      "parameters": {
+        "sessionKey": "={{ $('Construir Contexto IA').first().json.tenantId + '_tg_' + $('Construir Contexto IA').first().json.chatId }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "code-extract-tg",
+      "name": "Extraer Respuesta TG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2304, 304],
+      "parameters": {
+        "jsCode": "var ctx=$('Construir Contexto IA').first().json;\nvar output=$('Agente IA Telegram').first().json.output||'';\nvar clean=output.replace(/<JSON>[\\s\\S]*?<\\/JSON>/g,'').trim();\n// Telegram no soporta HTML complejo; limpiar tags que no sean básicos\nclean=clean.replace(/<(?!\\/?(?:b|i|u|s|code|pre|a\\s))[^>]+>/gi,'');\nreturn [{json:{platform:'telegram',tenantId:ctx.tenantId,senderId:ctx.senderId,senderName:ctx.senderName,messageText:ctx.message,responseText:clean,chatId:ctx.chatId,botToken:ctx.botToken}}];"
+      }
+    },
+    {
+      "id": "http-send-tg",
+      "name": "Enviar Respuesta Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2560, 304],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $json.botToken + '/sendMessage' }}",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id:$json.chatId, text:$json.responseText, parse_mode:'HTML' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "http-conv-in-tg",
+      "name": "Registrar Mensaje Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2816, 256],
+      "parameters": {
+        "method": "POST", "url": "=http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId:$json.tenantId, contactPhone:$json.chatId, contactName:$json.senderName, platform:'telegram', message:$json.messageText, sender:'client' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "http-conv-out-tg",
+      "name": "Registrar Respuesta Bot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2816, 368],
+      "parameters": {
+        "method": "POST", "url": "=http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId:$json.tenantId, contactPhone:$json.chatId, platform:'telegram', message:$json.responseText, sender:'bot' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "Recibir Mensaje Telegram": { "main": [[{ "node": "Normalizar Payload TG", "type": "main", "index": 0 }]] },
+    "Normalizar Payload TG": { "main": [[{ "node": "Buscar Config Tenant", "type": "main", "index": 0 }]] },
+    "Buscar Config Tenant": { "main": [[{ "node": "Tenant Encontrado?", "type": "main", "index": 0 }]] },
+    "Tenant Encontrado?": { "main": [[], [{ "node": "Tenant Activo?", "type": "main", "index": 0 }]] },
+    "Tenant Activo?": { "main": [[], [{ "node": "Obtener Credenciales TG", "type": "main", "index": 0 }]] },
+    "Obtener Credenciales TG": { "main": [[{ "node": "Construir Contexto IA", "type": "main", "index": 0 }]] },
+    "Construir Contexto IA": { "main": [[{ "node": "En Horario?", "type": "main", "index": 0 }]] },
+    "En Horario?": { "main": [
+      [{ "node": "Enviar Fuera de Horario TG", "type": "main", "index": 0 }],
+      [{ "node": "Agente IA Telegram", "type": "main", "index": 0 }]
+    ]},
+    "Agente IA Telegram": { "main": [[{ "node": "Extraer Respuesta TG", "type": "main", "index": 0 }]] },
+    "OpenAI Telegram": { "ai_languageModel": [[{ "node": "Agente IA Telegram", "type": "ai_languageModel", "index": 0 }]] },
+    "Memoria Conversacion TG": { "ai_memory": [[{ "node": "Agente IA Telegram", "type": "ai_memory", "index": 0 }]] },
+    "Extraer Respuesta TG": { "main": [[{ "node": "Enviar Respuesta Telegram", "type": "main", "index": 0 }]] },
+    "Enviar Respuesta Telegram": { "main": [[{ "node": "Registrar Mensaje Cliente", "type": "main", "index": 0 }]] },
+    "Registrar Mensaje Cliente": { "main": [[{ "node": "Registrar Respuesta Bot", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": false },
+  "pinData": {}
+}

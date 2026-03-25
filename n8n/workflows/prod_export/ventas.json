@@ -1,0 +1,1274 @@
+{
+  "createdAt": "2026-03-03T22:00:38.258Z",
+  "updatedAt": "2026-03-12T05:31:07.222Z",
+  "id": "T5XupWLGylrlaibu",
+  "name": "[AI] Ventas Inteligente",
+  "active": false,
+  "nodes": [
+    {
+      "id": "trigger-ventas",
+      "name": "Recibir Datos del Router",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        304
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "mongo-catalogo",
+      "name": "Cargar Catalogo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        304
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Lee el catalogo desde businessConfig enviado por el Router\n// (el Router ya cargo los productos via /internal/tenant/by-instance)\nconst data = $('Recibir Datos del Router').first().json;\nconst catalog = data.businessConfig?.catalog || [];\nif (catalog.length > 0) {\n  return catalog.map(p => ({ json: p }));\n}\nreturn [{ json: { name: 'Sin productos configurados', description: '', price: 0 } }];\n"
+      }
+    },
+    {
+      "id": "code-contexto-ventas",
+      "name": "Preparar Contexto Ventas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        764,
+        304
+      ],
+      "parameters": {
+        "jsCode": "// Sub-workflow: Ventas\nvar input = $(\"Recibir Datos del Router\").first().json;\n\n// Productos del backend\nvar productosBackend = [];\ntry {\n  var pNode = $('Buscar Productos Backend').first().json;\n  if (pNode && pNode.products && Array.isArray(pNode.products)) productosBackend = pNode.products;\n} catch(e) {}\n\nvar catalogoEstatico = Array.isArray(input.catalog) ? input.catalog : [];\n\nvar catalogText = '';\nif (productosBackend.length > 0) {\n  catalogText = 'CATALOGO (habla SOLO de estos productos):\\n';\n  productosBackend.forEach(function(p) {\n    catalogText += '- ' + p.name;\n    if (p.category) catalogText += ' [' + p.category + ']';\n    if (p.price) catalogText += ' $' + Number(p.price).toLocaleString('es-CO');\n    if (p.comparePrice && p.comparePrice > p.price) catalogText += ' (antes $' + Number(p.comparePrice).toLocaleString('es-CO') + ')';\n    if (p.sku) catalogText += ' SKU:' + p.sku;\n    if (p.description) catalogText += ' | ' + p.description;\n    if (!p.available) catalogText += ' [NO DISPONIBLE]';\n    if (p.stock !== null && p.stock !== undefined && p.stock <= 5) catalogText += ' [Ultimas ' + p.stock + ' unidades]';\n    catalogText += '\\n';\n  });\n} else if (catalogoEstatico.length > 0) {\n  catalogText = 'CATALOGO (habla SOLO de estos productos):\\n';\n  catalogoEstatico.forEach(function(item) {\n    catalogText += '- ' + item.name;\n    if (item.price) catalogText += ' $' + Number(item.price).toLocaleString('es-CO');\n    if (item.category) catalogText += ' (' + item.category + ')';\n    if (item.description) catalogText += ': ' + item.description;\n    if (!item.available) catalogText += ' [NO DISPONIBLE]';\n    catalogText += '\\n';\n  });\n} else {\n  catalogText = 'No hay productos en el catalogo por el momento.';\n}\n\nvar faqText = '';\nvar faqItems = Array.isArray(input.faq) ? input.faq : [];\nfaqText = faqItems.length > 0\n  ? faqItems.map(function(f) { return 'P: ' + f.question + '\\nR: ' + f.answer; }).join('\\n\\n')\n  : 'Sin preguntas frecuentes.';\n\nvar allowedText = Array.isArray(input.allowedActions) && input.allowedActions.length > 0\n  ? input.allowedActions.map(function(a) { return '- ' + a; }).join('\\n')\n  : '- Informar sobre productos y precios\\n- Tomar pedidos';\n\nvar restrictText = Array.isArray(input.restrictions) && input.restrictions.length > 0\n  ? input.restrictions.map(function(r) { return '- ' + r; }).join('\\n')\n  : '- No revelar informacion confidencial';\n\n// Negocio\nvar businessConfig = (input.businessConfig) || {};\nvar addressParts = [];\nvar ba = businessConfig.businessAddress || {};\nif (ba.street) addressParts.push(ba.street);\nif (ba.city) addressParts.push(ba.city);\nif (ba.state) addressParts.push(ba.state);\nif (ba.reference) addressParts.push('Ref: ' + ba.reference);\nvar locationText = addressParts.length > 0\n  ? addressParts.join(', ')\n  : (input.location || businessConfig.location || '');\n\n// Ventas config\nvar salesConfig = businessConfig.salesConfig || {};\nvar requireCustomerName = salesConfig.requireCustomerName === true;\nvar requireCustomerAddress = salesConfig.requireCustomerAddress === true;\nvar requireCustomerId = salesConfig.requireCustomerId === true;\nvar deliveryFee = salesConfig.deliveryFee || 0;\nvar deliveryType = salesConfig.deliveryType || 'both';\nvar confirmationInstructions = salesConfig.confirmationInstructions || '';\n\n// Pago\nvar paymentConfig = businessConfig.paymentConfig || {};\nvar hasQrImage = !!(paymentConfig.qrImageUrl);\nvar paymentMethodsText = Array.isArray(input.paymentMethods) && input.paymentMethods.length > 0\n  ? input.paymentMethods.join(', ')\n  : '';\n\n// ─── DATOS OBLIGATORIOS DEL CLIENTE ────────────────────────────────────────\nvar requiredFields = [];\nif (requireCustomerName) requiredFields.push('Nombre completo');\nif (requireCustomerId) requiredFields.push('Numero de cedula o documento de identidad');\nif (requireCustomerAddress) requiredFields.push('Direccion completa de entrega: calle/carrera + barrio + ciudad + referencia (TODO en un campo)');\n\nvar dataRulesText = '';\nif (requiredFields.length > 0) {\n  dataRulesText += '\\n\\n=== DATOS OBLIGATORIOS DEL CLIENTE (maxima prioridad) ===\\n';\n  dataRulesText += 'Antes de confirmar el pedido, debes tener EXACTAMENTE estos datos:\\n';\n  requiredFields.forEach(function(f, i) { dataRulesText += (i+1) + '. ' + f + '\\n'; });\n  dataRulesText += '\\nREGLAS ESTRICTAS:\\n';\n  dataRulesText += '- Pide SOLO los ' + requiredFields.length + ' datos de la lista anterior + la talla/variante del producto si aplica.\\n';\n  dataRulesText += '- NO pidas \"ciudad de entrega\" por separado (ya esta incluida en la direccion completa).\\n';\n  dataRulesText += '- NO pidas \"metodo de pago\" si el cliente ya lo menciono o si el negocio tiene metodo definido.\\n';\n  dataRulesText += '- NO confirmes el pedido hasta tener los ' + requiredFields.length + ' datos.\\n';\n  dataRulesText += '- NO inventes ni asumas datos del cliente.\\n';\n  if (confirmationInstructions) {\n    dataRulesText += '\\nGuia de comportamiento del negocio (NO es una lista de campos adicionales, son instrucciones de estilo):\\n';\n    // Extract only the style/behavior parts, ignoring field lists\n    dataRulesText += confirmationInstructions + '\\n';\n  }\n}\n\n// Entregas\nvar deliveryText = '';\nif (deliveryFee > 0) deliveryText += '\\nCosto de domicilio: $' + Number(deliveryFee).toLocaleString('es-CO') + '\\n';\nif (deliveryType === 'pickup') deliveryText += 'Solo recogida en tienda.\\n';\nelse if (deliveryType === 'delivery') deliveryText += 'Solo domicilio.\\n';\n\n// Datos bancarios\nvar paymentBankText = '';\nif (paymentConfig.accountNumber || hasQrImage) {\n  paymentBankText = '\\n\\nDATOS BANCARIOS PARA TRANSFERENCIA:\\n';\n  if (paymentConfig.bankName) paymentBankText += '- Banco: ' + paymentConfig.bankName + '\\n';\n  if (paymentConfig.accountNumber) {\n    var tipo = paymentConfig.accountType === 'checking' ? 'Corriente' : 'Ahorros';\n    paymentBankText += '- Cuenta ' + tipo + ': ' + paymentConfig.accountNumber + '\\n';\n  }\n  if (paymentConfig.accountHolder) paymentBankText += '- Titular: ' + paymentConfig.accountHolder + '\\n';\n  if (hasQrImage) paymentBankText += '- QR disponible (se envia automaticamente al cliente)\\n';\n}\n\n// QR: trigger amplio — cualquier mención de pago/transferencia\nvar qrInstructionText = '';\nif (hasQrImage) {\n  qrInstructionText = '\\n\\n=== ENVIO AUTOMATICO DEL QR DE PAGO ===\\n';\n  qrInstructionText += 'Cuando el cliente mencione O pregunte sobre: transferencia, Nequi, Bancolombia, QR, pago, consignar, pagar, metodo de pago —\\n';\n  qrInstructionText += 'DEBES escribir [ENVIAR_QR] como PRIMERA linea de tu respuesta (antes de cualquier texto).\\n';\n  qrInstructionText += 'Formato correcto:\\n[ENVIAR_QR]\\nTu respuesta normal aqui...\\n';\n  qrInstructionText += 'El sistema enviara automaticamente la imagen QR al cliente.\\n';\n}\n\n// Confirmacion de venta\n// {{ y }} → { y } en el prompt (escape LangChain template)\nvar confirmationTagText = '';\nif (paymentConfig.confirmationMethod === 'manual' || !paymentConfig.confirmationMethod) {\n  confirmationTagText = '\\n\\n=== CUANDO EL CLIENTE CONFIRME EL PAGO ===\\n';\n  confirmationTagText += 'Cuando el cliente envie comprobante, foto de transferencia, o diga que ya pago,\\n';\n  confirmationTagText += 'escribe en la PRIMERA linea:\\n';\n  confirmationTagText += '[VENTA_CONFIRMADA]{{\"clientName\":\"<nombre>\",\"clientId\":\"<cedula>\",\"clientAddress\":\"<direccion>\",\"productName\":\"<producto>\",\"productDetails\":\"<detalle: talla, color>\",\"quantity\":1,\"totalAmount\":null,\"paymentMessage\":\"<descripcion del pago>\"}}\\n';\n  confirmationTagText += 'Luego la respuesta de confirmacion al cliente.\\n';\n  confirmationTagText += 'IMPORTANTE: JSON valido, comillas dobles, null para numeros desconocidos.';\n}\n\nvar systemMessage =\n  (input.aiInstructions || 'Eres un asistente de ventas profesional y amable.') +\n  '\\n\\nCliente en esta conversacion: ' + (input.pushName || 'Cliente') +\n\n  dataRulesText +\n\n  '\\n\\n' + catalogText +\n  '\\n\\nFAQ:\\n' + faqText +\n  (paymentMethodsText ? '\\n\\nMETODOS DE PAGO: ' + paymentMethodsText : '') +\n  (locationText ? '\\n\\nUBICACION: ' + locationText : '') +\n  deliveryText +\n  paymentBankText +\n  qrInstructionText +\n  confirmationTagText +\n\n  '\\n\\nACCIONES PERMITIDAS:\\n' + allowedText +\n  '\\n\\nRESTRICCIONES:\\n' + restrictText +\n  '\\n\\nMENSAJE DEL CLIENTE: \"' + (input.message || '') + '\"';\n\nreturn [{\n  json: {\n    phone: input.phone,\n    tenantId: input.tenantId,\n    instanceName: input.instanceName,\n    pushName: input.pushName,\n    message: input.message,\n    intent: input.intent,\n    confidence: input.confidence,\n    evolutionApiUrl: input.evolutionApiUrl,\n    evolutionApiKey: input.evolutionApiKey,\n    tenantEmail: input.tenantEmail || '',\n    businessName: (businessConfig.businessName) || '',\n    paymentQrImageUrl: (paymentConfig.qrImageUrl) || '',\n    systemMessage: systemMessage\n  }\n}];"
+      }
+    },
+    {
+      "id": "agent-ventas",
+      "name": "Agente Ventas",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        832,
+        304
+      ],
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "={{ $json.systemMessage }}"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-ventas",
+      "name": "OpenAI Ventas",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        768,
+        512
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "H8tvpKZpVTZ3Jn1x",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "id": "code-evaluar-ventas",
+      "name": "Evaluar Respuesta Ventas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        304
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Preparar Contexto Ventas').first().json;\nconst aiOutput = $input.first().json;\nlet response = aiOutput.output || aiOutput.text || 'Lo siento, no pude procesar tu consulta de ventas.';\n\n// Detectar [ENVIAR_QR] tag — el sistema enviara la imagen QR al cliente\nconst sendQrImage = response.includes('[ENVIAR_QR]') && !!(input.paymentQrImageUrl);\nif (response.includes('[ENVIAR_QR]')) {\n  response = response.replace('[ENVIAR_QR]', '').trim();\n}\n\n// Detectar confirmacion de venta y parsear JSON estructurado\nconst saleConfirmed = response.trimStart().startsWith('[VENTA_CONFIRMADA]');\nlet saleData = {};\nif (saleConfirmed) {\n  const withoutTag = response.replace('[VENTA_CONFIRMADA]', '').trim();\n  const jsonMatch = withoutTag.match(/^(\\{[\\s\\S]*?\\})(\\s*[\\s\\S]*)$/);\n  if (jsonMatch) {\n    try {\n      saleData = JSON.parse(jsonMatch[1]);\n    } catch(e) {\n      // JSON invalido — continuar sin datos estructurados\n    }\n    response = jsonMatch[2].trim();\n  } else {\n    response = withoutTag;\n  }\n}\n\nlet imagenProductoUrl = null;\ntry {\n  const specificProds = $('Buscar Producto Especifico').first().json.products || [];\n  if (specificProds.length > 0 && specificProds[0].imageUrl) {\n    imagenProductoUrl = specificProds[0].imageUrl;\n  }\n} catch(e) {}\n\nif (!imagenProductoUrl) {\n  try {\n    const allProds = $('Buscar Productos Backend').first().json.products || [];\n    const responseLower = response.toLowerCase();\n    const matched = allProds.find(p =>\n      p.imageUrl && p.name &&\n      (responseLower.includes(p.name.toLowerCase()) ||\n       p.name.toLowerCase().split(' ').some(w => w.length > 3 && responseLower.includes(w)))\n    );\n    if (matched) imagenProductoUrl = matched.imageUrl;\n  } catch(e) {}\n}\n\nreturn [{ json: {\n  response, saleConfirmed, sendQrImage,\n  saleData,\n  imagenProductoUrl,\n  intent: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  tokensEstimated: Math.ceil(((input.message||'') + response).length / 4),\n  phone: input.phone,\n  tenantId: input.tenantId,\n  tenantEmail: input.tenantEmail || '',\n  businessName: input.businessName || '',\n  paymentQrImageUrl: input.paymentQrImageUrl || '',\n  instanceName: input.instanceName,\n  evolutionApiUrl: input.evolutionApiUrl || '',\n  evolutionApiKey: input.evolutionApiKey || '',\n  intent_handled: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  action_taken: saleConfirmed ? 'venta_confirmada' : 'respuesta_generada',\n  metadata: { pushName: input.pushName, original_message: input.message }\n} }];"
+      }
+    },
+    {
+      "id": "ea5d775b-ad01-421b-b371-fed4d5725fe5",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        512
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Preparar Contexto Ventas').first().json.tenantId + '_' + $('Preparar Contexto Ventas').first().json.phone + '_v3' }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "buscar-productos-1772037737680",
+      "name": "Buscar Productos Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        304,
+        304
+      ],
+      "parameters": {
+        "url": "={{ \"http://host.docker.internal:3000/internal/products?tenantId=\" + $json.tenantId + \"&limit=20\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "if-es-imagen",
+      "name": "¿Es Imagen?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        732,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-imagen",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "image",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "code-preparar-imagen",
+      "name": "Preparar Request Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst prodData = $('Buscar Productos Backend').first().json;\nconst prods = (prodData.products || input.catalog || []).slice(0, 15);\nconst catalogText = prods.length > 0\n  ? prods.map(p => {\n      let line = '• ' + p.name;\n      if (p.category) line += ' [' + p.category + ']';\n      if (p.price) line += ' — $' + Number(p.price).toLocaleString('es-CO');\n      if (p.description) line += ': ' + String(p.description).substring(0, 80);\n      if (p.available === false) line += ' [NO DISPONIBLE]';\n      return line;\n    }).join('\\n')\n  : 'Sin catálogo configurado.';\nconst businessName = input.businessName || 'nuestra tienda';\nconst clientName = input.pushName || 'cliente';\nconst caption = input.message && input.message !== '[imagen]' ? `El cliente escribió: \"${input.message}\". ` : '';\nconst thumbnail = input.imageThumbnailBase64 || '';\nconst systemContent = `Eres un experto en ventas de ${businessName}. Analiza la imagen y responde SOLO en JSON con este formato exacto: {\"producto_catalogo\": \"nombre exacto del producto si coincide con el catálogo o null si no hay coincidencia\", \"respuesta\": \"respuesta cálida y comercial en español\"}`;\nconst userContent = [];\nif (thumbnail) {\n  userContent.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + thumbnail, detail: 'low' } });\n}\nuserContent.push({ type: 'text', text: `${caption}Catálogo disponible:\\n${catalogText}\\n\\nIdentifica si el producto de la imagen coincide con alguno del catálogo y elabora una respuesta comercial.` });\nconst openAiBody = {\n  model: 'gpt-4o',\n  response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: systemContent }, { role: 'user', content: userContent }],\n  max_tokens: 500\n};\nreturn [{ json: { openAiBody, prods, phone: input.phone, tenantId: input.tenantId, instanceName: input.instanceName, pushName: input.pushName, evolutionApiUrl: input.evolutionApiUrl || '', evolutionApiKey: input.evolutionApiKey || '' } }];"
+      }
+    },
+    {
+      "id": "http-analizar-imagen",
+      "name": "Analizar Imagen con IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1024,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.openAiBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-respuesta-imagen",
+      "name": "Formatear Respuesta Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Preparar Request Imagen').first().json;\nconst apiResp = $input.first().json;\nlet responseText, productoCatalogo = null;\ntry {\n  const raw = apiResp.choices?.[0]?.message?.content || '{}';\n  const parsed = JSON.parse(raw);\n  responseText = parsed.respuesta || raw;\n  productoCatalogo = parsed.producto_catalogo || null;\n} catch(e) {\n  responseText = apiResp.choices?.[0]?.message?.content || '¡Hola! Recibí tu imagen. ¿Qué producto buscas?';\n}\nlet imagenProductoUrl = null;\nif (productoCatalogo && ctx.prods && ctx.prods.length > 0) {\n  const lc = productoCatalogo.toLowerCase().trim();\n  const match = ctx.prods.find(p => p.name && (p.name.toLowerCase().includes(lc) || lc.includes(p.name.toLowerCase())));\n  if (match && match.imageUrl) imagenProductoUrl = match.imageUrl;\n}\nreturn [{ json: { response: responseText, imagenProductoUrl: imagenProductoUrl, phone: ctx.phone, tenantId: ctx.tenantId, instanceName: ctx.instanceName, evolutionApiUrl: ctx.evolutionApiUrl, evolutionApiKey: ctx.evolutionApiKey, intent: 'ventas', intent_handled: 'ventas', action_taken: 'imagen_analizada', metadata: { pushName: ctx.pushName, producto_identificado: productoCatalogo } } }];"
+      }
+    },
+    {
+      "id": "if-pide-catalogo",
+      "name": "¿Pide Catálogo PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        732,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-catalogo",
+              "leftValue": "={{ $json.message || '' }}",
+              "rightValue": "cat[aá]logo|pdf|brochure|listado.*precio|ficha.*product|ver.*producto|envíame.*catálogo|mándame.*catálogo",
+              "operator": {
+                "type": "string",
+                "operation": "regex",
+                "name": "filter.operator.regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "http-obtener-pdf",
+      "name": "Obtener Catalogo PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        768,
+        600
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://host.docker.internal:3000/internal/catalog-pdf?tenantId=' + $json.tenantId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "if-tiene-pdf",
+      "name": "Tiene PDF",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-pdf",
+              "leftValue": "={{ $json.pdfUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "name": "filter.operator.notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "code-preparar-envio-pdf",
+      "name": "Preparar Envio PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        480
+      ],
+      "parameters": {
+        "jsCode": "const router = $('Recibir Datos del Router').first().json;\nconst pdfData = $('Obtener Catalogo PDF').first().json;\nconst businessName = router.businessName || 'nuestros productos';\nreturn [{\n  json: {\n    evolutionUrl: router.evolutionApiUrl + '/message/sendMedia/' + router.instanceName,\n    evolutionApiKey: router.evolutionApiKey,\n    requestBody: {\n      number: router.phone,\n      mediatype: 'document',\n      mimetype: 'application/pdf',\n      caption: 'Catalogo de ' + businessName,\n      media: pdfData.pdfUrl,\n      fileName: pdfData.fileName || 'catalogo.pdf'\n    },\n    phone: router.phone,\n    tenantId: router.tenantId,\n    pushName: router.pushName,\n    businessName: businessName\n  }\n}];"
+      }
+    },
+    {
+      "id": "http-enviar-pdf",
+      "name": "Enviar PDF por WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1536,
+        480
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.evolutionUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.evolutionApiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-respuesta-pdf",
+      "name": "Respuesta PDF Enviado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        480
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $('Preparar Envio PDF').first().json;\nreturn [{\n  json: {\n    response: 'Listo, ' + (ctx.pushName || 'estimado cliente') + '! Te acabo de enviar el catalogo de ' + (ctx.businessName || 'nuestra tienda') + ' en PDF.\\n\\nHay algun producto que te llame la atencion? Con gusto te ayudo con precios, disponibilidad o para coordinar tu pedido.',\n    phone: ctx.phone,\n    tenantId: ctx.tenantId,\n    intent: 'ventas',\n    intent_handled: 'ventas',\n    action_taken: 'catalogo_pdf_enviado',\n    metadata: { pushName: ctx.pushName }\n  }\n}];"
+      }
+    },
+    {
+      "id": "code-sin-pdf",
+      "name": "Sin PDF — Texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        720
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst prods = (input.catalog || []);\nconst catalogLines = prods.slice(0, 10).map(p => {\n  let line = `• *${p.name}*`;\n  if (p.price) line += ` — $${Number(p.price).toLocaleString('es-CO')}`;\n  if (p.available === false) line += ' _(no disponible)_';\n  return line;\n}).join('\\n');\nreturn [{\n  json: {\n    response: `¡Hola ${input.pushName || 'estimado cliente'}! 🛍️ Por el momento no tenemos catálogo en PDF, pero aquí están nuestros productos:\\n\\n${catalogLines || 'Escríbenos qué buscas y te ayudamos con gusto.'}\\n\\n¿Cuál te interesa? 😊`,\n    phone: input.phone,\n    tenantId: input.tenantId,\n    intent: 'ventas',\n    intent_handled: 'ventas',\n    action_taken: 'catalogo_texto_enviado',\n    metadata: { pushName: input.pushName }\n  }\n}];"
+      }
+    },
+    {
+      "id": "http-buscar-especifico",
+      "name": "Buscar Producto Especifico",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        512,
+        304
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:3000/internal/products",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $('Recibir Datos del Router').first().json.tenantId }}"
+            },
+            {
+              "name": "query",
+              "value": "={{ $('Recibir Datos del Router').first().json.messageType !== 'image' ? $('Recibir Datos del Router').first().json.message : '' }}"
+            },
+            {
+              "name": "limit",
+              "value": "3"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "if-tiene-imagen-vision",
+      "name": "Tiene Imagen Catalogo",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-img-vision",
+              "leftValue": "={{ $json.imagenProductoUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "code-preparar-img-vision",
+      "name": "Preparar Imagen Vision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: {\n  ...input,\n  mediaBody: {\n    number: String(input.phone),\n    mediatype: 'image',\n    mimetype: 'image/jpeg',\n    caption: '',\n    media: input.imagenProductoUrl,\n    fileName: 'producto.jpg'\n  },\n  evolutionUrl: (input.evolutionApiUrl || '') + '/message/sendMedia/' + (input.instanceName || '')\n} }];",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "http-enviar-img-vision",
+      "name": "Enviar Imagen Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.evolutionUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.evolutionApiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.mediaBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-respuesta-vision-img",
+      "name": "Respuesta Vision Con Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const imageResult = $input.first().json;\nconst visionData = $('Formatear Respuesta Imagen').first().json;\nreturn [{ json: { response: visionData.response, phone: visionData.phone, tenantId: visionData.tenantId, intent_handled: 'ventas', action_taken: 'imagen_con_producto', metadata: visionData.metadata } }];"
+      }
+    },
+    {
+      "id": "code-respuesta-vision-noimg",
+      "name": "Respuesta Vision Sin Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: { response: input.response, phone: input.phone, tenantId: input.tenantId, intent_handled: 'ventas', action_taken: 'imagen_analizada', metadata: input.metadata } }];"
+      }
+    },
+    {
+      "id": "if-hay-imagen-producto",
+      "name": "Hay Imagen Producto",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        304
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-img-prod",
+              "leftValue": "={{ $json.imagenProductoUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "code-preparar-img-ventas",
+      "name": "Preparar Imagen Ventas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: {\n  ...input,\n  mediaBody: {\n    number: String(input.phone),\n    mediatype: 'image',\n    mimetype: 'image/jpeg',\n    caption: '',\n    media: input.imagenProductoUrl,\n    fileName: 'producto.jpg'\n  },\n  evolutionUrl: (input.evolutionApiUrl || '') + '/message/sendMedia/' + (input.instanceName || '')\n} }];",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "http-enviar-img-ventas",
+      "name": "Enviar Imagen Ventas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1840,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.evolutionUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.evolutionApiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.mediaBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "code-respuesta-ventas-img",
+      "name": "Respuesta Ventas Con Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const imageResult = $input.first().json;\nconst ventasData = $('Evaluar Respuesta Ventas').first().json;\nreturn [{ json: { response: ventasData.response, phone: ventasData.phone, tenantId: ventasData.tenantId, intent_handled: 'ventas', action_taken: 'ventas_con_imagen', metadata: ventasData.metadata } }];"
+      }
+    },
+    {
+      "id": "code-respuesta-ventas-noimg",
+      "name": "Respuesta Ventas Sin Imagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{ json: { response: input.response, phone: input.phone, tenantId: input.tenantId, intent_handled: 'ventas', action_taken: 'ventas_texto', metadata: input.metadata } }];"
+      }
+    },
+    {
+      "id": "if-venta-confirmada",
+      "name": "¿Venta Confirmada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1584,
+        304
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.saleConfirmed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-notificar-venta",
+      "name": "Notificar Venta al Negocio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1784,
+        184
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/notify/sale-confirmed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $json.tenantId }}"
+            },
+            {
+              "name": "tenantEmail",
+              "value": "={{ $json.tenantEmail }}"
+            },
+            {
+              "name": "businessName",
+              "value": "={{ $json.businessName }}"
+            },
+            {
+              "name": "clientName",
+              "value": "={{ $json.saleData.clientName || $json.metadata.pushName || $json.phone }}"
+            },
+            {
+              "name": "clientPhone",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "clientId",
+              "value": "={{ $json.saleData.clientId || \"\" }}"
+            },
+            {
+              "name": "productName",
+              "value": "={{ $json.saleData.productName || $json.metadata.original_message || \"\" }}"
+            },
+            {
+              "name": "productDetails",
+              "value": "={{ $json.saleData.productDetails || \"\" }}"
+            },
+            {
+              "name": "quantity",
+              "value": "={{ $json.saleData.quantity || 1 }}"
+            },
+            {
+              "name": "totalAmount",
+              "value": "={{ $json.saleData.totalAmount || null }}"
+            },
+            {
+              "name": "paymentMessage",
+              "value": "={{ $json.saleData.paymentMessage || $json.metadata.original_message || \"\" }}"
+            },
+            {
+              "name": "deliveryAddress",
+              "value": "={{ $json.saleData.clientAddress || \"\" }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "if-enviar-qr",
+      "name": "¿Enviar QR de Pago?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1384,
+        304
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-qr",
+              "leftValue": "={{ $json.sendQrImage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-enviar-qr-pago",
+      "name": "Enviar QR de Pago",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1584,
+        184
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.evolutionApiUrl + \"/message/sendMedia/\" + $json.instanceName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.evolutionApiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ number: String($json.phone), mediatype: \"image\", mimetype: \"image/png\", caption: \"QR de pago\", media: $json.paymentQrImageUrl, fileName: \"qr_pago.png\" }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Recibir Datos del Router": {
+      "main": [
+        [
+          {
+            "node": "Buscar Productos Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Productos Backend": {
+      "main": [
+        [
+          {
+            "node": "Buscar Producto Especifico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Contexto Ventas": {
+      "main": [
+        [
+          {
+            "node": "Agente Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Ventas": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente Ventas",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente Ventas": {
+      "main": [
+        [
+          {
+            "node": "Evaluar Respuesta Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agente Ventas",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es Imagen?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Request Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿Pide Catálogo PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Request Imagen": {
+      "main": [
+        [
+          {
+            "node": "Analizar Imagen con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar Imagen con IA": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Pide Catálogo PDF?": {
+      "main": [
+        [
+          {
+            "node": "Obtener Catalogo PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Contexto Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Catalogo PDF": {
+      "main": [
+        [
+          {
+            "node": "Tiene PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tiene PDF": {
+      "main": [
+        [
+          {
+            "node": "Preparar Envio PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sin PDF — Texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Envio PDF": {
+      "main": [
+        [
+          {
+            "node": "Enviar PDF por WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar PDF por WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Respuesta PDF Enviado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Producto Especifico": {
+      "main": [
+        [
+          {
+            "node": "¿Es Imagen?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta Imagen": {
+      "main": [
+        [
+          {
+            "node": "Tiene Imagen Catalogo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tiene Imagen Catalogo": {
+      "main": [
+        [
+          {
+            "node": "Preparar Imagen Vision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Vision Sin Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Imagen Vision": {
+      "main": [
+        [
+          {
+            "node": "Enviar Imagen Vision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Imagen Vision": {
+      "main": [
+        [
+          {
+            "node": "Respuesta Vision Con Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar Respuesta Ventas": {
+      "main": [
+        [
+          {
+            "node": "¿Enviar QR de Pago?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hay Imagen Producto": {
+      "main": [
+        [
+          {
+            "node": "Preparar Imagen Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta Ventas Sin Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Imagen Ventas": {
+      "main": [
+        [
+          {
+            "node": "Enviar Imagen Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Imagen Ventas": {
+      "main": [
+        [
+          {
+            "node": "Respuesta Ventas Con Imagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Venta Confirmada?": {
+      "main": [
+        [
+          {
+            "node": "Notificar Venta al Negocio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hay Imagen Producto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Venta al Negocio": {
+      "main": [
+        [
+          {
+            "node": "Hay Imagen Producto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Enviar QR de Pago?": {
+      "main": [
+        [
+          {
+            "node": "Enviar QR de Pago",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿Venta Confirmada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar QR de Pago": {
+      "main": [
+        [
+          {
+            "node": "¿Venta Confirmada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "be0a2a6d-43ac-4477-902e-1594a34497f6",
+  "triggerCount": 0,
+  "shared": [
+    {
+      "createdAt": "2026-03-03T22:00:38.263Z",
+      "updatedAt": "2026-03-03T22:00:38.263Z",
+      "role": "workflow:owner",
+      "workflowId": "T5XupWLGylrlaibu",
+      "projectId": "dphuEt0WiJyF6f7N",
+      "project": {
+        "createdAt": "2026-03-03T20:57:36.972Z",
+        "updatedAt": "2026-03-03T21:02:20.087Z",
+        "id": "dphuEt0WiJyF6f7N",
+        "name": "Miguel Henao <miguelangelhenaoc2007@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "projectRelations": [
+          {
+            "createdAt": "2026-03-03T20:57:36.973Z",
+            "updatedAt": "2026-03-03T20:57:36.973Z",
+            "role": "project:personalOwner",
+            "userId": "a259b7ae-ce4d-460b-8060-089ed8f93d22",
+            "projectId": "dphuEt0WiJyF6f7N",
+            "user": {
+              "createdAt": "2026-03-03T20:57:35.386Z",
+              "updatedAt": "2026-03-04T04:43:38.000Z",
+              "id": "a259b7ae-ce4d-460b-8060-089ed8f93d22",
+              "email": "miguelangelhenaoc2007@gmail.com",
+              "firstName": "Miguel",
+              "lastName": "Henao",
+              "personalizationAnswers": {
+                "version": "v4",
+                "personalization_survey_submitted_at": "2026-03-04T04:43:37.205Z",
+                "personalization_survey_n8n_version": "1.82.3"
+              },
+              "settings": {
+                "userActivated": true,
+                "firstSuccessfulWorkflowId": "78gn0qi3wby3PnK4",
+                "userActivatedAt": 1772575651815,
+                "easyAIWorkflowOnboarded": true
+              },
+              "role": "global:owner",
+              "disabled": false,
+              "mfaEnabled": false,
+              "isPending": false,
+              "isOwner": true
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": []
+}

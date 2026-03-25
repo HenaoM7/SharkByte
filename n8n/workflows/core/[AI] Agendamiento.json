@@ -1,0 +1,371 @@
+{
+  "id": "ej33BLGVi8jIzne4",
+  "name": "[AI] Agendamiento",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger",
+      "name": "Cuando lo llama el Router",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL + '/internal/google/calendar/status?tenantId=' + $json.tenantId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.BACKEND_INTERNAL_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-google-status",
+      "name": "Verificar Estado Google",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-connected",
+              "leftValue": "={{ $json.connected }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-connected",
+      "name": "¿Google Conectado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { response: 'Lo siento, el módulo de agendamiento no está configurado todavía. Por favor comunícate directamente con nosotros para agendar tu cita.', tokensEstimated: 0, intent: 'agendamiento' } }];"
+      },
+      "id": "no-connection",
+      "name": "Sin Conexión Google",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL + '/internal/google/sheets/rows?tenantId=' + $('Cuando lo llama el Router').first().json.tenantId + '&phone=' + encodeURIComponent($('Cuando lo llama el Router').first().json.phone || '') }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.BACKEND_INTERNAL_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-citas",
+      "name": "Obtener Citas del Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const statusData = $('Verificar Estado Google').first().json;\nconst rowsData = $('Obtener Citas del Cliente').first().json;\nconst input = $('Cuando lo llama el Router').first().json;\n\nconst userCitas = (rowsData.rows || [])\n  .map(r => `- ${r[0]} ${r[1]}: ${r[4] || 'cita'} (${r[5] || 'Confirmada'})`);\n\nconst now = new Date();\nconst todayDate = now.toISOString().split('T')[0];\nconst mañana = new Date(now.getTime() + 86400000).toISOString().split('T')[0];\nconst diasSemana = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];\nconst diaActual = diasSemana[now.getDay()];\nconst hora = now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });\n\nconst rawSystemMessage = `Eres el asistente de agendamiento de ${input.businessName || 'este negocio'}.\nFecha y hora actual: ${todayDate} (${diaActual}) a las ${hora}.\nMañana: ${mañana}\n\nCITAS CONFIRMADAS DE ESTE CLIENTE (${input.phone}):\n${userCitas.length > 0 ? userCitas.join('\\n') : 'Sin citas activas'}\n\nRESPONDE SIEMPRE EN DOS PARTES:\n1. Un mensaje natural y amigable para el cliente.\n2. En la última línea, un objeto JSON sin markdown:\n{\"action\":\"<agendar|disponibilidad|mis_citas|cancelar|responder>\",\"eventData\":{\"fecha\":\"YYYY-MM-DD\",\"hora\":\"HH:MM\",\"horaFin\":\"HH:MM\",\"servicio\":\"...\",\"nombre\":\"...\"}}\n\nREGLAS:\n- Si el cliente quiere AGENDAR: extrae fecha, hora inicio, hora fin (default: hora inicio +1h), servicio y nombre. Si falta algún dato, usa action 'responder' y pídelo.\n- Si el cliente quiere VER SUS CITAS: action 'mis_citas', eventData null.\n- Si pregunta DISPONIBILIDAD: action 'disponibilidad', eventData null.\n- Si quiere CANCELAR: action 'cancelar', eventData null.\n- Para cualquier otra respuesta: action 'responder', eventData null.\n- Cuando eventData no aplica, escribe exactamente: \"eventData\":null`;\n\n// Escapar { y } para LangChain PromptTemplate (igual que el Router)\nconst systemMessage = rawSystemMessage.split('{').join('{{').split('}').join('}}');\n\nreturn [{ json: {\n  message: input.message || '',\n  systemMessage,\n  tenantId: input.tenantId,\n  calendarId: statusData.calendarId || 'primary',\n  phone: input.phone || '',\n  pushName: input.pushName || 'Cliente',\n  businessName: input.businessName || '',\n  todayDate,\n  userCitas\n}}];"
+      },
+      "id": "prep-context",
+      "name": "Preparar Contexto del Agente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "={{ $json.systemMessage }}"
+        }
+      },
+      "id": "agente-ia",
+      "name": "Agente IA Agendamiento",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1100, 300],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "openai-model",
+      "name": "OpenAI gpt-4o-mini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [1040, 520],
+      "credentials": {
+        "openAiApi": {
+          "id": "nbuugsGU5Pc5bRff",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 8,
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Preparar Contexto del Agente').first().json.tenantId + '_' + $('Preparar Contexto del Agente').first().json.phone + '_agenda' }}"
+      },
+      "id": "memory",
+      "name": "Memoria Agendamiento",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [1220, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentOutput = ($input.first().json.output || '').trim();\nconst ctx = $('Preparar Contexto del Agente').first().json;\n\nlet action = 'responder';\nlet response = agentOutput;\nlet eventData = null;\n\n// Buscar el JSON estructurado en la última línea del output\nconst lines = agentOutput.split('\\n');\nlet jsonStr = null;\nfor (let i = lines.length - 1; i >= 0; i--) {\n  const line = lines[i].trim();\n  if (line.startsWith('{') && line.includes('\"action\"')) {\n    jsonStr = line;\n    break;\n  }\n}\n// Si no encontramos en líneas, buscar con regex\nif (!jsonStr) {\n  const match = agentOutput.match(/\\{[^\\n]*\"action\"[^\\n]*\\}(?=[^{]*$)/);\n  if (match) jsonStr = match[0];\n}\n\nif (jsonStr) {\n  try {\n    const parsed = JSON.parse(jsonStr);\n    action = parsed.action || 'responder';\n    eventData = parsed.eventData || null;\n    // Limpiar el JSON del texto de respuesta\n    response = agentOutput.replace(jsonStr, '').trim();\n  } catch(e) {\n    // Si no parsea, usar el output completo\n  }\n}\n\nreturn [{ json: {\n  action,\n  response: response || agentOutput,\n  eventData,\n  tenantId: ctx.tenantId,\n  calendarId: ctx.calendarId,\n  phone: ctx.phone,\n  pushName: ctx.pushName,\n  todayDate: ctx.todayDate\n}}];"
+      },
+      "id": "parse-response",
+      "name": "Parsear Respuesta del Agente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "rule-agendar",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "agendar",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "agendar"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "rule-cancelar",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "cancelar",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cancelar"
+            }
+          ]
+        },
+        "fallbackOutput": "extra"
+      },
+      "id": "switch-action",
+      "name": "¿Requiere acción Google?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL + '/internal/google/calendar/event' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.BACKEND_INTERNAL_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  tenantId: $json.tenantId,\n  summary: 'Cita - ' + ($json.eventData.servicio || 'Consulta') + ' - ' + ($json.eventData.nombre || $json.pushName),\n  description: 'WhatsApp: ' + $json.phone,\n  startDateTime: $json.eventData.fecha + 'T' + $json.eventData.hora + ':00',\n  endDateTime: $json.eventData.fecha + 'T' + ($json.eventData.horaFin || $json.eventData.hora) + ':00',\n  timeZone: 'America/Bogota'\n}) }}",
+        "options": {}
+      },
+      "id": "create-event",
+      "name": "Crear Evento en Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 160],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL + '/internal/google/sheets/append' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-internal-key", "value": "={{ $env.BACKEND_INTERNAL_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const ctx = $('Parsear Respuesta del Agente').first().json;\n  const ed = ctx.eventData;\n  const calEventId = $json.eventId || '';\n  return JSON.stringify({\n    tenantId: ctx.tenantId,\n    fecha: ed.fecha,\n    hora: ed.hora,\n    nombre: ed.nombre || ctx.pushName,\n    telefono: ctx.phone,\n    servicio: ed.servicio || 'Consulta',\n    estado: 'Confirmada',\n    eventoCalendarId: calEventId\n  });\n})() }}",
+        "options": {}
+      },
+      "id": "append-sheet",
+      "name": "Registrar en Sheets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 160],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Parsear Respuesta del Agente').first().json;\nreturn [{ json: { response: ctx.response, tokensEstimated: Math.round((ctx.response||'').length / 4) + 100, intent: 'agendamiento' } }];"
+      },
+      "id": "final-agendar",
+      "name": "Respuesta Agendamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "// La cancelación requiere un flujo adicional de identificación.\n// El agente ya informó al cliente — retornamos la respuesta del agente directamente.\nconst ctx = $json;\nreturn [{ json: { response: ctx.response, tokensEstimated: Math.round((ctx.response||'').length / 4) + 50, intent: 'agendamiento' } }];"
+      },
+      "id": "cancelar-flow",
+      "name": "Flujo Cancelación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $json;\nreturn [{ json: { response: ctx.response || 'Procesado correctamente.', tokensEstimated: Math.round((ctx.response||'').length / 4) + 50, intent: 'agendamiento' } }];"
+      },
+      "id": "final-other",
+      "name": "Respuesta Directa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { response: 'Lo siento, tuve un problema técnico al procesar tu solicitud. Por favor intenta de nuevo en un momento.', tokensEstimated: 0, intent: 'agendamiento', _error: true } }];"
+      },
+      "id": "error-handler",
+      "name": "Manejar Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 500]
+    }
+  ],
+  "connections": {
+    "Cuando lo llama el Router": {
+      "main": [
+        [{ "node": "Verificar Estado Google", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verificar Estado Google": {
+      "main": [
+        [{ "node": "¿Google Conectado?", "type": "main", "index": 0 }]
+      ],
+      "error": [
+        [{ "node": "Manejar Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "¿Google Conectado?": {
+      "main": [
+        [{ "node": "Obtener Citas del Cliente", "type": "main", "index": 0 }],
+        [{ "node": "Sin Conexión Google", "type": "main", "index": 0 }]
+      ]
+    },
+    "Obtener Citas del Cliente": {
+      "main": [
+        [{ "node": "Preparar Contexto del Agente", "type": "main", "index": 0 }]
+      ]
+    },
+    "Preparar Contexto del Agente": {
+      "main": [
+        [{ "node": "Agente IA Agendamiento", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenAI gpt-4o-mini": {
+      "ai_languageModel": [
+        [{ "node": "Agente IA Agendamiento", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Memoria Agendamiento": {
+      "ai_memory": [
+        [{ "node": "Agente IA Agendamiento", "type": "ai_memory", "index": 0 }]
+      ]
+    },
+    "Agente IA Agendamiento": {
+      "main": [
+        [{ "node": "Parsear Respuesta del Agente", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parsear Respuesta del Agente": {
+      "main": [
+        [{ "node": "¿Requiere acción Google?", "type": "main", "index": 0 }]
+      ]
+    },
+    "¿Requiere acción Google?": {
+      "main": [
+        [{ "node": "Crear Evento en Calendar", "type": "main", "index": 0 }],
+        [{ "node": "Flujo Cancelación", "type": "main", "index": 0 }],
+        [{ "node": "Respuesta Directa", "type": "main", "index": 0 }]
+      ]
+    },
+    "Crear Evento en Calendar": {
+      "main": [
+        [{ "node": "Registrar en Sheets", "type": "main", "index": 0 }]
+      ],
+      "error": [
+        [{ "node": "Respuesta Agendamiento", "type": "main", "index": 0 }]
+      ]
+    },
+    "Registrar en Sheets": {
+      "main": [
+        [{ "node": "Respuesta Agendamiento", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "econodo"
+  },
+  "tags": [
+    { "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z", "id": "tag-ai-sub", "name": "[AI] Sub-workflow" }
+  ]
+}

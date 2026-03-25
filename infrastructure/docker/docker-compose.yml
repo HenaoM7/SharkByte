@@ -1,0 +1,207 @@
+# ============================================================
+# Econodo — Docker Compose
+# Para producción: copiar .env.example → .env y configurar
+# todas las variables marcadas como REQUERIDO EN PRODUCCIÓN
+# ============================================================
+version: "3.8"
+
+services:
+
+  mongodb:
+    image: mongo:6.0
+    container_name: eco_mongodb
+    restart: always
+    ports:
+      - "127.0.0.1:27017:27017"  # Solo localhost — no exponer públicamente
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-admin123}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: eco_mongo_express
+    restart: always
+    ports:
+      - "127.0.0.1:8081:8081"  # Solo localhost — NO exponer en producción sin Nginx + IP whitelist
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USERNAME:-admin}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASSWORD:-admin123}
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-admin123}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  n8n:
+    image: n8nio/n8n:1.82.3
+    container_name: eco_n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-admin123}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}  # PRODUCCIÓN: https://n8n.tudominio.com/
+      # Backend API — usada en workflows
+      BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:3000}
+      BACKEND_INTERNAL_KEY: ${BACKEND_INTERNAL_KEY:-changeme-internal-key}  # REQUERIDO EN PRODUCCIÓN
+      # Clave Evolution API — usada en workflows
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-http://evolution-api:8080}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-superapikey}  # REQUERIDO EN PRODUCCIÓN
+      # Clave OpenAI / IA — usada en workflows
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}  # REQUERIDO EN PRODUCCIÓN
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  evolution-postgres:
+    image: postgres:15
+    container_name: eco_evolution_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${EVOLUTION_DB_USER:-evolution}
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD:-evolution123}
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EVOLUTION_DB_USER:-evolution}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  evolution-redis:
+    image: redis:7
+    container_name: eco_evolution_redis
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: eco_evolution
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}  # PRODUCCIÓN: https://wa.tudominio.com
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-superapikey}  # REQUERIDO EN PRODUCCIÓN — generar aleatorio
+      LOG_LEVEL: "ERROR,WARN"
+      CONFIG_SESSION_PHONE_VERSION: "2.2413.51"
+      LOG_BAILEYS: "error"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER:-evolution}:${EVOLUTION_DB_PASSWORD:-evolution123}@evolution-postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_LOCAL_ENABLED: "false"
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mongo_data:
+  n8n_data:
+  evolution_instances:
+  evolution_postgres_data:

@@ -1,0 +1,278 @@
+{
+  "createdAt": "2026-03-03T22:00:37.176Z",
+  "updatedAt": "2026-03-05T16:53:32.818Z",
+  "id": "0szZiEHhZ7ZBKVFF",
+  "name": "[AI] Escalamiento Humano",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "trigger-escalar",
+      "name": "Recibir Datos del Router",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "id": "mongo-agentes",
+      "name": "Verificar Agentes Disponibles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        304
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Leer agentes humanos desde los datos enviados por el Router\nconst input = $('Recibir Datos del Router').first().json;\nconst allAgents = Array.isArray(input.humanAgents) ? input.humanAgents : [];\nconst availableAgents = allAgents.filter(a => a.available === true);\nreturn [{ json: { available: availableAgents.length > 0, agentes: availableAgents, message: availableAgents.length > 0 ? `${availableAgents.length} agente(s) disponible(s)` : 'Sin agentes disponibles' } }];"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst agentes = $input.all().map(i => i.json);\nconst hayAgentes = agentes.length > 0 && !!agentes[0].name;\n\nlet responseText;\nlet actionTaken;\n\nif (hayAgentes) {\n  const agente = agentes[0]; // Asignar al primer agente disponible\n  responseText = `Entiendo que necesitas hablar con una persona, ${input.pushName || 'estimado cliente'}. Te estoy conectando con ${agente.name}. Un agente te contactar\\u00e1 en breve por este mismo chat. Gracias por tu paciencia.`;\n  actionTaken = 'agente_asignado';\n} else {\n  responseText = `Entiendo que necesitas hablar con una persona, ${input.pushName || 'estimado cliente'}. En este momento no hay agentes disponibles. Hemos registrado tu solicitud y un agente te contactar\\u00e1 a la brevedad posible. Gracias por tu paciencia.`;\n  actionTaken = 'ticket_creado';\n}\n\nreturn [{\n  json: {\n    response: responseText,\n    phone: input.phone,\n    tenantId: input.tenantId,\n    intent_handled: 'humano',\n    action_taken: actionTaken,\n    metadata: {\n      pushName: input.pushName,\n      original_message: input.message,\n      agentes_disponibles: hayAgentes,\n      agente_asignado: hayAgentes ? agentes[0].name : null\n    }\n  }\n}];"
+      },
+      "id": "code-evaluar-agentes",
+      "name": "Evaluar Disponibilidad",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "id": "mongo-log-escalamiento",
+      "name": "Registrar Escalamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        304
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Registro de escalamiento: reemplaza insercion directa en MongoDB\n// En produccion usar Backend API cuando este implementado\nconst input = $input.first().json;\nreturn [{ json: { ...input, escalated: true, timestamp: new Date().toISOString(), logged: true } }];\n"
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const escalResult = $('Evaluar Disponibilidad').first().json;\nconst emailResult = $input.first().json;\nreturn [{\n  json: {\n    response: escalResult.response,\n    phone: escalResult.phone,\n    tenantId: escalResult.tenantId,\n    intent_handled: escalResult.intent_handled,\n    action_taken: escalResult.action_taken,\n    metadata: escalResult.metadata,\n    reason: (escalResult.metadata && escalResult.metadata.original_message) || 'Solicitud de agente humano',\n    agente_asignado: (escalResult.metadata && escalResult.metadata.agente_asignado) || null,\n    timestamp: new Date().toISOString(),\n    emailSent: emailResult.ok === true\n  }\n}];"
+      },
+      "id": "code-preparar-log",
+      "name": "Preparar Log Escalamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "id": "code-preparar-email",
+      "name": "Preparar Email Escalamiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        304
+      ],
+      "parameters": {
+        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst evalResult = $('Evaluar Disponibilidad').first().json;\nreturn [{\n  json: {\n    // Email payload\n    tenantId: input.tenantId,\n    tenantEmail: input.tenantEmail || '',\n    clientPhone: input.phone || '',\n    clientName: input.pushName || 'Cliente',\n    clientMessage: input.message || '',\n    businessName: input.businessName || input.tenantId,\n    // Escalation response to pass forward\n    response: evalResult.response,\n    phone: evalResult.phone,\n    intent_handled: evalResult.intent_handled,\n    action_taken: evalResult.action_taken,\n    metadata: evalResult.metadata\n  }\n}];"
+      }
+    },
+    {
+      "id": "http-enviar-email",
+      "name": "Notificar Tenant por Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        304
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/notify/escalation",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $json.tenantId }}"
+            },
+            {
+              "name": "tenantEmail",
+              "value": "={{ $json.tenantEmail }}"
+            },
+            {
+              "name": "clientPhone",
+              "value": "={{ $json.clientPhone }}"
+            },
+            {
+              "name": "clientName",
+              "value": "={{ $json.clientName }}"
+            },
+            {
+              "name": "clientMessage",
+              "value": "={{ $json.clientMessage }}"
+            },
+            {
+              "name": "businessName",
+              "value": "={{ $json.businessName }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Recibir Datos del Router": {
+      "main": [
+        [
+          {
+            "node": "Verificar Agentes Disponibles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Agentes Disponibles": {
+      "main": [
+        [
+          {
+            "node": "Evaluar Disponibilidad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar Disponibilidad": {
+      "main": [
+        [
+          {
+            "node": "Preparar Email Escalamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Log Escalamiento": {
+      "main": [
+        [
+          {
+            "node": "Registrar Escalamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Email Escalamiento": {
+      "main": [
+        [
+          {
+            "node": "Notificar Tenant por Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Tenant por Email": {
+      "main": [
+        [
+          {
+            "node": "Preparar Log Escalamiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "9e205b66-afc8-4b58-85f4-8f5927475349",
+  "triggerCount": 0,
+  "shared": [
+    {
+      "createdAt": "2026-03-03T22:00:37.182Z",
+      "updatedAt": "2026-03-03T22:00:37.182Z",
+      "role": "workflow:owner",
+      "workflowId": "0szZiEHhZ7ZBKVFF",
+      "projectId": "dphuEt0WiJyF6f7N",
+      "project": {
+        "createdAt": "2026-03-03T20:57:36.972Z",
+        "updatedAt": "2026-03-03T21:02:20.087Z",
+        "id": "dphuEt0WiJyF6f7N",
+        "name": "Miguel Henao <miguelangelhenaoc2007@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "projectRelations": [
+          {
+            "createdAt": "2026-03-03T20:57:36.973Z",
+            "updatedAt": "2026-03-03T20:57:36.973Z",
+            "role": "project:personalOwner",
+            "userId": "a259b7ae-ce4d-460b-8060-089ed8f93d22",
+            "projectId": "dphuEt0WiJyF6f7N",
+            "user": {
+              "createdAt": "2026-03-03T20:57:35.386Z",
+              "updatedAt": "2026-03-04T04:43:38.000Z",
+              "id": "a259b7ae-ce4d-460b-8060-089ed8f93d22",
+              "email": "miguelangelhenaoc2007@gmail.com",
+              "firstName": "Miguel",
+              "lastName": "Henao",
+              "personalizationAnswers": {
+                "version": "v4",
+                "personalization_survey_submitted_at": "2026-03-04T04:43:37.205Z",
+                "personalization_survey_n8n_version": "1.82.3"
+              },
+              "settings": {
+                "userActivated": true,
+                "firstSuccessfulWorkflowId": "78gn0qi3wby3PnK4",
+                "userActivatedAt": 1772575651815,
+                "easyAIWorkflowOnboarded": true
+              },
+              "role": "global:owner",
+              "disabled": false,
+              "mfaEnabled": false,
+              "isPending": false,
+              "isOwner": true
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": []
+}

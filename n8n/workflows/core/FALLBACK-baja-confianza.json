@@ -1,0 +1,35 @@
+{
+  "name": "[Fallback] Baja Confianza",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "id": "fallback-trigger",
+      "name": "Cuando lo llama el Router"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst aiResponse = (input.ai_response || '').trim();\nconst pushName = input.pushName || 'cliente';\nconst businessName = input.businessName || 'nuestro equipo';\n\nlet response;\nif (aiResponse && aiResponse.length > 10) {\n  response = aiResponse + '\n\n_Si deseas hablar con un agente, responde *AGENTE* y te transferimos de inmediato._';\n} else {\n  response = 'Hola ' + pushName + '! Recibimos tu mensaje y lo estamos revisando. Un especialista de ' + businessName + ' te contactará en breve.\n\nSi es urgente, responde *AGENTE* para atención inmediata.';\n}\n\nreturn [{\n  json: {\n    response,\n    intent: 'fallback',\n    confidence: input.confidence || 0,\n    escalated: false,\n    original_intent: input.intent || 'unknown'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, 300],
+      "id": "fallback-code",
+      "name": "Generar Respuesta Fallback"
+    }
+  ],
+  "connections": {
+    "Cuando lo llama el Router": {
+      "main": [
+        [{ "node": "Generar Respuesta Fallback", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "description": "Sub-workflow para mensajes con baja confianza (<0.7). Usa respuesta GPT-4o parcial + CTA de escalamiento a agente humano."
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "createdAt": "2026-03-22T00:00:00.000Z",
+  "updatedAt": "2026-03-22T00:00:00.000Z",
+  "id": "core-multi-canal-ai",
+  "name": "[CORE] AI Multi-Canal",
+  "active": false,
+  "nodes": [
+    {
+      "id": "trigger-multichannel",
+      "name": "Recibir Datos del Canal",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 304],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "code-build-context",
+      "name": "Construir Contexto IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, 304],
+      "parameters": {
+        "jsCode": "// Sub-workflow compartido por todos los canales (FB, IG, TG, TT)\n// Recibe: platform, tenantId, senderId, senderName, messageText, businessConfig, references\nvar input = $('Recibir Datos del Canal').first().json;\nvar bc = input.businessConfig || {};\nvar refs = input.references || [];\n\n// Catalogo de productos\nvar catalogLines = (bc.catalog || []).map(function(p) {\n  var line = '- ' + p.name;\n  if (p.price) line += ' | $' + Number(p.price).toLocaleString('es-CO');\n  if (p.category) line += ' | ' + p.category;\n  if (p.available === false) line += ' [NO DISPONIBLE]';\n  if (p.description) line += ': ' + p.description;\n  return line;\n});\n\n// FAQ\nvar faqLines = (bc.faq || []).map(function(f) {\n  return 'P: ' + f.question + '\\nR: ' + f.answer;\n});\n\n// Referencias externas activas (para RAG)\nvar refsText = '';\nif (refs.length > 0) {\n  refsText = '\\n\\nFUENTES DE REFERENCIA REGISTRADAS (el sistema puede consultarlas para responder con datos reales):\\n';\n  refs.forEach(function(r) {\n    refsText += '- [' + r.type.toUpperCase() + '] ' + r.name + ': ' + r.url;\n    if (r.description) refsText += ' — ' + r.description;\n    refsText += '\\n';\n  });\n}\n\n// Horario\nvar tz = bc.businessHours && bc.businessHours.timezone ? bc.businessHours.timezone : 'America/Bogota';\nvar now = new Date();\nvar localTime = new Intl.DateTimeFormat('es-CO', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);\nvar dayName = new Intl.DateTimeFormat('es-CO', { timeZone: tz, weekday: 'long' }).format(now);\nvar schedule = bc.businessHours && bc.businessHours.schedule ? bc.businessHours.schedule : [];\nvar todaySchedule = schedule.find(function(d) {\n  return (d.day || '').toLowerCase() === dayName.toLowerCase();\n});\nvar parts = localTime.split(':');\nvar nowMins = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);\nvar inHours = true;\nif (todaySchedule && todaySchedule.isOpen) {\n  var op = (todaySchedule.open || '00:00').split(':');\n  var cl = (todaySchedule.close || '23:59').split(':');\n  inHours = nowMins >= (parseInt(op[0],10)*60+parseInt(op[1],10)) && nowMins <= (parseInt(cl[0],10)*60+parseInt(cl[1],10));\n} else if (todaySchedule && !todaySchedule.isOpen) {\n  inHours = false;\n}\n\n// Plataforma label\nvar platformLabel = { facebook: 'Facebook Messenger', instagram: 'Instagram Direct', telegram: 'Telegram', tiktok: 'TikTok' }[input.platform] || input.platform;\n\n// Clasificacion CRITICA\nvar classificationInstruction =\n  'INSTRUCCION CRITICA — DEBES SEGUIRLA OBLIGATORIAMENTE:\\n' +\n  'Al FINAL de tu respuesta al cliente, SIEMPRE agrega este bloque exacto:\\n' +\n  '<JSON>\\n' +\n  '{\"intent\":\"INTENT\",\"confidence\":SCORE,\"suggested_response\":\"TU_RESPUESTA\"}\\n' +\n  '</JSON>\\n\\n' +\n  'Donde INTENT es UNO de: ventas | soporte | agendamiento | informacion | humano | fallback\\n' +\n  'Donde SCORE es un numero entre 0.0 y 1.0\\n\\n';\n\n// Escapar { } para LangChain PromptTemplate\nvar oe = '{{';\nvar ce = '}}';\nvar rawSystem =\n  classificationInstruction +\n  '=== INSTRUCCIONES DEL NEGOCIO ===\\n' +\n  (bc.aiInstructions || 'Eres un asistente de atencion al cliente profesional y amable.') +\n  '\\n\\nNombre del negocio: ' + (bc.businessName || '') +\n  '\\nCanal de atencion: ' + platformLabel +\n  '\\nTono: ' + (bc.tone || 'amigable') +\n  '\\nIdioma: ' + (bc.language || 'es') +\n  '\\n\\nCATALOGO DE PRODUCTOS:\\n' + (catalogLines.length > 0 ? catalogLines.join('\\n') : 'Sin productos configurados.') +\n  '\\n\\nPREGUNTAS FRECUENTES:\\n' + (faqLines.length > 0 ? faqLines.join('\\n\\n') : 'Sin FAQ.') +\n  (bc.paymentMethods && bc.paymentMethods.length > 0 ? '\\n\\nMetodos de pago: ' + bc.paymentMethods.join(', ') : '') +\n  (bc.location ? '\\n\\nUbicacion: ' + bc.location : '') +\n  refsText +\n  '\\n\\nAcciones permitidas: ' + (bc.allowedActions || []).join(', ') +\n  '\\nRestricciones: ' + (bc.restrictions || []).join(', ') +\n  '\\n\\nCliente en esta conversacion: ' + (input.senderName || 'Cliente');\n\nvar systemMessage = rawSystem.split('{').join(oe).split('}').join(ce);\n\nreturn [{\n  json: {\n    platform: input.platform,\n    tenantId: input.tenantId,\n    senderId: input.senderId,\n    senderName: input.senderName || 'Cliente',\n    message: input.messageText,\n    chatId: input.chatId || input.senderId,\n    pageId: input.pageId || '',\n    instagramAccountId: input.instagramAccountId || '',\n    tiktokAccountId: input.tiktokAccountId || '',\n    businessConfig: bc,\n    inHours: inHours,\n    outOfHoursMessage: bc.outOfHoursMessage || 'Estamos fuera de horario. Te responderemos a la brevedad.',\n    systemMessage: systemMessage\n  }\n}];"
+      }
+    },
+    {
+      "id": "if-horario-mc",
+      "name": "En Horario?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [512, 288],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "cond-inhours-mc",
+              "leftValue": "={{ $json.inHours }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "agent-multichannel",
+      "name": "Agente IA Multi-Canal",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [576, 416],
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "={{ $json.systemMessage }}"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-multichannel",
+      "name": "OpenAI Multi-Canal",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [512, 608],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 800
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-creds",
+          "name": "OpenAI SharkByte"
+        }
+      }
+    },
+    {
+      "id": "memory-multichannel",
+      "name": "Memoria Conversacion",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [640, 608],
+      "parameters": {
+        "sessionKey": "={{ $('Construir Contexto IA').first().json.tenantId + '_' + $('Construir Contexto IA').first().json.platform + '_' + $('Construir Contexto IA').first().json.senderId }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "code-extract-response",
+      "name": "Extraer Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [832, 416],
+      "parameters": {
+        "jsCode": "var ctx = $('Construir Contexto IA').first().json;\nvar agentOutput = $('Agente IA Multi-Canal').first().json.output || '';\n\n// Limpiar bloque <JSON>...</JSON> de la respuesta al cliente\nvar cleanResponse = agentOutput.replace(/<JSON>[\\s\\S]*?<\\/JSON>/g, '').trim();\n\n// Extraer intent/confidence del bloque <JSON>\nvar intent = 'fallback';\nvar confidence = 0.5;\ntry {\n  var match = agentOutput.match(/<JSON>([\\s\\S]*?)<\\/JSON>/);\n  if (match) {\n    var parsed = JSON.parse(match[1].trim());\n    intent = parsed.intent || 'fallback';\n    confidence = parsed.confidence || 0.5;\n  }\n} catch(e) {}\n\nreturn [{\n  json: {\n    platform: ctx.platform,\n    tenantId: ctx.tenantId,\n    senderId: ctx.senderId,\n    chatId: ctx.chatId,\n    pageId: ctx.pageId,\n    instagramAccountId: ctx.instagramAccountId,\n    tiktokAccountId: ctx.tiktokAccountId,\n    responseText: cleanResponse,\n    intent: intent,\n    confidence: confidence,\n    inHours: ctx.inHours,\n    outOfHoursMessage: ctx.outOfHoursMessage\n  }\n}];"
+      }
+    },
+    {
+      "id": "code-fuera-horario-mc",
+      "name": "Preparar Respuesta Fuera Horario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [576, 176],
+      "parameters": {
+        "jsCode": "var ctx = $('Construir Contexto IA').first().json;\nreturn [{\n  json: {\n    platform: ctx.platform,\n    tenantId: ctx.tenantId,\n    senderId: ctx.senderId,\n    chatId: ctx.chatId,\n    pageId: ctx.pageId,\n    instagramAccountId: ctx.instagramAccountId,\n    tiktokAccountId: ctx.tiktokAccountId,\n    responseText: ctx.outOfHoursMessage,\n    intent: 'fallback',\n    confidence: 1.0,\n    inHours: false,\n    outOfHoursMessage: ctx.outOfHoursMessage\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "Recibir Datos del Canal": {
+      "main": [[{ "node": "Construir Contexto IA", "type": "main", "index": 0 }]]
+    },
+    "Construir Contexto IA": {
+      "main": [[{ "node": "En Horario?", "type": "main", "index": 0 }]]
+    },
+    "En Horario?": {
+      "main": [
+        [{ "node": "Preparar Respuesta Fuera Horario", "type": "main", "index": 0 }],
+        [{ "node": "Agente IA Multi-Canal", "type": "main", "index": 0 }]
+      ]
+    },
+    "Agente IA Multi-Canal": {
+      "main": [[{ "node": "Extraer Respuesta", "type": "main", "index": 0 }]]
+    },
+    "OpenAI Multi-Canal": {
+      "ai_languageModel": [[{ "node": "Agente IA Multi-Canal", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Memoria Conversacion": {
+      "ai_memory": [[{ "node": "Agente IA Multi-Canal", "type": "ai_memory", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

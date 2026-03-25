@@ -1,0 +1,245 @@
+{
+  "createdAt": "2026-03-23T00:00:00.000Z",
+  "updatedAt": "2026-03-23T00:00:00.000Z",
+  "id": "ch-facebook-v2",
+  "name": "[CH] Facebook Messenger",
+  "active": false,
+  "nodes": [
+    {
+      "id": "wh-fb",
+      "name": "Recibir Mensaje Facebook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 304],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "facebook-handler",
+        "options": { "responseData": "allEntries", "responseCode": 200 }
+      },
+      "webhookId": "fb-handler-v2-001"
+    },
+    {
+      "id": "code-norm-fb",
+      "name": "Normalizar Payload FB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, 304],
+      "parameters": {
+        "jsCode": "// SharkByte backend envía payload normalizado\nvar body = $input.first().json.body || $input.first().json;\nif (!body.tenantId || !body.senderId || !body.messageText) return [];\nif (body.platform !== 'facebook') return [];\nreturn [{ json: {\n  platform: 'facebook',\n  tenantId: body.tenantId,\n  senderId: String(body.senderId),\n  senderName: body.senderName || 'Cliente',\n  messageText: body.messageText,\n  messageId: body.messageId || '',\n  timestamp: body.timestamp || Date.now(),\n  pageId: body.pageId || ''\n}}];"
+      }
+    },
+    {
+      "id": "http-tenant-fb",
+      "name": "Buscar Config Tenant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [512, 304],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/internal/tenant/by-tenantid/' + $json.tenantId }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }] },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "if-found-fb",
+      "name": "Tenant Encontrado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [768, 288],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c1", "leftValue": "={{ $json.found }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "if-active-fb",
+      "name": "Tenant Activo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1024, 192],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c2", "leftValue": "={{ $json.isActive }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "http-channel-fb",
+      "name": "Obtener Credenciales FB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 192],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:3000/internal/channels/' + $('Normalizar Payload FB').first().json.tenantId + '/facebook' }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }] },
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "code-ctx-fb",
+      "name": "Construir Contexto IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1536, 192],
+      "parameters": {
+        "jsCode": "var msg = $('Normalizar Payload FB').first().json;\nvar tenant = $('Buscar Config Tenant').first().json;\nvar channel = $('Obtener Credenciales FB').first().json;\n\nif (!channel || !channel.found) throw new Error('[FB] Canal no configurado para tenant ' + msg.tenantId);\n\nvar bc = tenant.businessConfig || {};\nvar refs = tenant.references || [];\n\n// Horario\nvar tz = (bc.businessHours && bc.businessHours.timezone) ? bc.businessHours.timezone : 'America/Bogota';\nvar now = new Date();\nvar localTime = new Intl.DateTimeFormat('es-CO',{timeZone:tz,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);\nvar dayName = new Intl.DateTimeFormat('es-CO',{timeZone:tz,weekday:'long'}).format(now);\nvar schedule = (bc.businessHours && bc.businessHours.schedule) ? bc.businessHours.schedule : [];\nvar todaySchedule = schedule.find(function(d){ return (d.day||'').toLowerCase()===dayName.toLowerCase(); });\nvar parts = localTime.split(':'); var nowMins = parseInt(parts[0],10)*60+parseInt(parts[1],10);\nvar inHours = true;\nif (todaySchedule && todaySchedule.isOpen) {\n  var op=(todaySchedule.open||'00:00').split(':'); var cl=(todaySchedule.close||'23:59').split(':');\n  inHours = nowMins>=(parseInt(op[0],10)*60+parseInt(op[1],10)) && nowMins<=(parseInt(cl[0],10)*60+parseInt(cl[1],10));\n} else if (todaySchedule && !todaySchedule.isOpen) { inHours=false; }\n\n// Catalogo\nvar catalogLines=(bc.catalog||[]).map(function(p){\n  var l='- '+p.name; if(p.price) l+=' | $'+Number(p.price).toLocaleString('es-CO');\n  if(p.category) l+=' | '+p.category; if(p.available===false) l+=' [NO DISPONIBLE]';\n  if(p.description) l+=': '+p.description; return l;\n});\n\n// FAQ\nvar faqLines=(bc.faq||[]).map(function(f){ return 'P: '+f.question+'\\nR: '+f.answer; });\n\n// Referencias\nvar refsText='';\nif(refs.length>0){\n  refsText='\\n\\nFUENTES DE REFERENCIA (datos reales del negocio):\\n';\n  refs.forEach(function(r){ refsText+='- ['+r.type.toUpperCase()+'] '+r.name+': '+r.url; if(r.description) refsText+=' — '+r.description; refsText+='\\n'; });\n}\n\n// System prompt\nvar classInstr='INSTRUCCION CRITICA: Al FINAL de tu respuesta SIEMPRE agrega:\\n<JSON>\\n{\"intent\":\"INTENT\",\"confidence\":SCORE}\\n</JSON>\\nINTENT: ventas|soporte|agendamiento|informacion|humano|fallback\\n\\n';\nvar rawSys=classInstr+'=== INSTRUCCIONES DEL NEGOCIO ===\\n'+(bc.aiInstructions||'Eres un asistente de atencion al cliente profesional y amable.')+'\\n\\nNegocio: '+(bc.businessName||'')+'\\nCanal: Facebook Messenger\\nTono: '+(bc.tone||'amigable')+'\\n\\nCATALOGO:\\n'+(catalogLines.length>0?catalogLines.join('\\n'):'Sin productos.')+'\\n\\nFAQ:\\n'+(faqLines.length>0?faqLines.join('\\n\\n'):'Sin FAQ.')+((bc.paymentMethods&&bc.paymentMethods.length>0)?'\\nMetodos de pago: '+bc.paymentMethods.join(', '):'')+refsText+'\\n\\nCliente: '+(msg.senderName||'Cliente');\nvar oe='{{'; var ce='}}';\nvar systemMessage=rawSys.split('{').join(oe).split('}').join(ce);\n\nreturn [{ json: {\n  platform:'facebook', tenantId:msg.tenantId, senderId:msg.senderId,\n  senderName:msg.senderName, message:msg.messageText, pageId:msg.pageId,\n  accessToken:channel.accessToken||'',\n  inHours:inHours, outOfHoursMessage:bc.outOfHoursMessage||'Estamos fuera de horario. Te responderemos pronto.',\n  systemMessage:systemMessage\n}}];"
+      }
+    },
+    {
+      "id": "if-horario-fb",
+      "name": "En Horario?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1792, 176],
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [{ "id": "c3", "leftValue": "={{ $json.inHours }}", "rightValue": false, "operator": { "type": "boolean", "operation": "false" } }],
+          "combinator": "and" }, "options": {}
+      }
+    },
+    {
+      "id": "http-fuera-fb",
+      "name": "Enviar Fuera de Horario FB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2048, 96],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/me/messages",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [{ "name": "access_token", "value": "={{ $json.accessToken }}" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ recipient:{id:$json.senderId}, message:{text:$json.outOfHoursMessage}, messaging_type:'RESPONSE' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "agent-fb",
+      "name": "Agente IA Facebook",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [2048, 304],
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": { "systemMessage": "={{ $json.systemMessage }}" }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "openai-fb",
+      "name": "OpenAI Facebook",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [1984, 496],
+      "parameters": {
+        "model": { "__rl": true, "value": "gpt-4o", "mode": "list", "cachedResultName": "gpt-4o" },
+        "options": { "temperature": 0.4, "maxTokens": 800 }
+      },
+      "credentials": { "openAiApi": { "id": "openai-creds", "name": "OpenAI SharkByte" } }
+    },
+    {
+      "id": "memory-fb",
+      "name": "Memoria Conversacion FB",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [2112, 496],
+      "parameters": {
+        "sessionKey": "={{ $('Construir Contexto IA').first().json.tenantId + '_fb_' + $('Construir Contexto IA').first().json.senderId }}",
+        "contextWindowLength": 10
+      }
+    },
+    {
+      "id": "code-extract-fb",
+      "name": "Extraer Respuesta FB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2304, 304],
+      "parameters": {
+        "jsCode": "var ctx = $('Construir Contexto IA').first().json;\nvar output = $('Agente IA Facebook').first().json.output || '';\nvar clean = output.replace(/<JSON>[\\s\\S]*?<\\/JSON>/g,'').trim();\nreturn [{ json: { platform:'facebook', tenantId:ctx.tenantId, senderId:ctx.senderId, senderName:ctx.senderName, messageText:ctx.message, responseText:clean, accessToken:ctx.accessToken } }];"
+      }
+    },
+    {
+      "id": "http-send-fb",
+      "name": "Enviar Respuesta Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2560, 304],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v19.0/me/messages",
+        "sendQuery": true,
+        "queryParameters": { "parameters": [{ "name": "access_token", "value": "={{ $json.accessToken }}" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ recipient:{id:$json.senderId}, message:{text:$json.responseText}, messaging_type:'RESPONSE' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "http-conv-in-fb",
+      "name": "Registrar Mensaje Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2816, 256],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId:$json.tenantId, contactPhone:$json.senderId, contactName:$json.senderName, platform:'facebook', message:$json.messageText, sender:'client' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "http-conv-out-fb",
+      "name": "Registrar Respuesta Bot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2816, 368],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-internal-key", "value": "={{ $env.INTERNAL_KEY }}" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId:$json.tenantId, contactPhone:$json.senderId, platform:'facebook', message:$json.responseText, sender:'bot' }) }}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "Recibir Mensaje Facebook": { "main": [[{ "node": "Normalizar Payload FB", "type": "main", "index": 0 }]] },
+    "Normalizar Payload FB": { "main": [[{ "node": "Buscar Config Tenant", "type": "main", "index": 0 }]] },
+    "Buscar Config Tenant": { "main": [[{ "node": "Tenant Encontrado?", "type": "main", "index": 0 }]] },
+    "Tenant Encontrado?": { "main": [[], [{ "node": "Tenant Activo?", "type": "main", "index": 0 }]] },
+    "Tenant Activo?": { "main": [[], [{ "node": "Obtener Credenciales FB", "type": "main", "index": 0 }]] },
+    "Obtener Credenciales FB": { "main": [[{ "node": "Construir Contexto IA", "type": "main", "index": 0 }]] },
+    "Construir Contexto IA": { "main": [[{ "node": "En Horario?", "type": "main", "index": 0 }]] },
+    "En Horario?": { "main": [
+      [{ "node": "Enviar Fuera de Horario FB", "type": "main", "index": 0 }],
+      [{ "node": "Agente IA Facebook", "type": "main", "index": 0 }]
+    ]},
+    "Agente IA Facebook": { "main": [[{ "node": "Extraer Respuesta FB", "type": "main", "index": 0 }]] },
+    "OpenAI Facebook": { "ai_languageModel": [[{ "node": "Agente IA Facebook", "type": "ai_languageModel", "index": 0 }]] },
+    "Memoria Conversacion FB": { "ai_memory": [[{ "node": "Agente IA Facebook", "type": "ai_memory", "index": 0 }]] },
+    "Extraer Respuesta FB": { "main": [[{ "node": "Enviar Respuesta Facebook", "type": "main", "index": 0 }]] },
+    "Enviar Respuesta Facebook": { "main": [[{ "node": "Registrar Mensaje Cliente", "type": "main", "index": 0 }]] },
+    "Registrar Mensaje Cliente": { "main": [[{ "node": "Registrar Respuesta Bot", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": false },
+  "pinData": {}
+}
