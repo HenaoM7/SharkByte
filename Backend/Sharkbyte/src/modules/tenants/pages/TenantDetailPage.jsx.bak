@@ -1,0 +1,275 @@
+import { useState, useEffect } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import {
+  useTenant,
+  useTenantUsage,
+  useUpdateTenantPlan,
+  useActivateTenant,
+  useUpdateTenantInstance,
+  useUpdateTenantStatus,
+} from '../hooks'
+import Badge from '../../../shared/ui/Badge'
+import ProgressBar from '../../../shared/ui/ProgressBar'
+import Button from '../../../shared/ui/Button'
+import Spinner from '../../../shared/ui/Spinner'
+import ConfirmModal from '../../../shared/ui/ConfirmModal'
+import { useToast } from '../../../shared/hooks/useToast'
+import { nextMonthReset } from '../../../shared/utils/formatters'
+import { useAuthStore } from '../../auth/store'
+import WhatsAppConnectionCard from '../../whatsapp/components/WhatsAppConnectionCard'
+
+function Card({ title, children }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 p-6">
+      <h2 className="text-sm font-semibold text-gray-700 mb-4">{title}</h2>
+      {children}
+    </div>
+  )
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <p className="text-xs text-gray-400 mb-0.5">{label}</p>
+      <div className="text-sm text-gray-800">{children}</div>
+    </div>
+  )
+}
+
+const STATUS_LABELS = { active: 'Activo', inactive: 'Inactivo', suspended: 'Suspendido', trial: 'Trial', cancelled: 'Cancelado' }
+const STATUS_BADGE = { active: 'active', inactive: 'inactive', suspended: 'disconnected', trial: 'plan-free', cancelled: 'inactive' }
+
+export default function TenantDetailPage() {
+  const { tenantId } = useParams()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const { user } = useAuthStore()
+  const isOwner = user?.role === 'owner'
+
+  const { data: tenant, isLoading: loadingTenant } = useTenant(tenantId)
+  const { data: usage } = useTenantUsage(tenantId)
+  const updatePlan = useUpdateTenantPlan()
+  const activate = useActivateTenant()
+  const updateInstance = useUpdateTenantInstance()
+  const updateStatus = useUpdateTenantStatus()
+
+  const [confirmPlan, setConfirmPlan] = useState(false)
+  const [instanceName, setInstanceName] = useState('')
+  const [instanceStatus, setInstanceStatus] = useState('connected')
+  const [instanceApiUrl, setInstanceApiUrl] = useState('')
+  const [instanceApiKey, setInstanceApiKey] = useState('')
+  const [instMsg, setInstMsg] = useState(null)
+  const [confirmActivate, setConfirmActivate] = useState(false)
+  const [confirmSuspend, setConfirmSuspend] = useState(false)
+
+  useEffect(() => {
+    if (tenant) {
+      setInstanceName(tenant.evolutionInstance?.instanceName ?? '')
+      setInstanceStatus(tenant.evolutionInstance?.status ?? 'connected')
+      setInstanceApiUrl(tenant.evolutionInstance?.apiUrl ?? '')
+      setInstanceApiKey(tenant.evolutionInstance?.apiKey ?? '')
+    }
+  }, [tenant])
+
+  if (loadingTenant) return <div className="flex justify-center items-center h-64"><Spinner size="lg" /></div>
+  if (!tenant) return null
+
+  const plan = tenant.plan ?? {}
+  const maxMsg = plan.maxMessages ?? 100
+  const maxTok = plan.maxTokens ?? 50000
+  const usedMsg = usage?.messagesUsed ?? 0
+  const usedTok = usage?.tokensUsed ?? 0
+  const currentStatus = tenant.status ?? (tenant.isActive ? 'active' : 'inactive')
+
+  const hasEvolutionCredentials = !!(tenant?.evolutionInstance?.apiUrl && tenant?.evolutionInstance?.apiKey)
+
+  const handleActivate = () => {
+    activate.mutate(tenantId, {
+      onSuccess: () => { toast.success('Tenant activado correctamente'); setConfirmActivate(false) },
+      onError: (err) => { toast.error(err.response?.data?.message ?? 'Error al activar el tenant'); setConfirmActivate(false) },
+    })
+  }
+
+  const handleSuspend = () => {
+    updateStatus.mutate({ tenantId, status: 'suspended' }, {
+      onSuccess: () => { toast.success('Tenant suspendido'); setConfirmSuspend(false) },
+      onError: () => { toast.error('Error al suspender el tenant'); setConfirmSuspend(false) },
+    })
+  }
+
+  const handlePlanSave = () => {
+    updatePlan.mutate({ tenantId, planName: 'enterprise' }, {
+      onSuccess: () => { toast.success('Plan Enterprise asignado correctamente'); setConfirmPlan(false) },
+      onError: (err) => { toast.error(err.response?.data?.message ?? 'Error al actualizar plan'); setConfirmPlan(false) },
+    })
+  }
+
+  const handleInstanceSave = (e) => {
+    e.preventDefault()
+    setInstMsg(null)
+    const payload = { tenantId, instanceName, status: instanceStatus }
+    if (instanceApiUrl) payload.apiUrl = instanceApiUrl
+    if (instanceApiKey) payload.apiKey = instanceApiKey
+    updateInstance.mutate(payload, {
+      onSuccess: () => setInstMsg({ type: 'success', text: 'Instancia vinculada correctamente' }),
+      onError: (err) => setInstMsg({ type: 'error', text: err.response?.data?.message ?? 'Error al vincular' }),
+    })
+  }
+
+  return (
+    <div className="space-y-4">
+      <button onClick={() => navigate('/tenants')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Volver a Tenants
+      </button>
+
+      {/* DEV MODE: banner de pago desactivado — re-habilitar en producción
+      {currentStatus !== 'active' && (
+        <div className="rounded-lg border border-sb-secondary/40 bg-sb-primary/5 p-4 flex items-start gap-3">
+          <svg className="w-5 h-5 text-sb-primary shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+          </svg>
+          <div>
+            <p className="font-semibold text-sb-dark text-sm">Pago Enterprise obligatorio</p>
+            <p className="text-xs text-sb-neutral mt-0.5">
+              Para activar este tenant es obligatorio completar el pago del plan Enterprise. Gestiona el pago en <strong>Facturación</strong>.
+            </p>
+          </div>
+        </div>
+      )}
+      */}
+
+      {!hasEvolutionCredentials && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 flex items-start gap-3">
+          <svg className="w-5 h-5 text-orange-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <div>
+            <p className="font-semibold text-orange-800 text-sm">Credenciales de Evolution API no configuradas</p>
+            <p className="text-xs text-orange-700 mt-0.5">
+              Este tenant no puede procesar mensajes de WhatsApp hasta que se configure la <strong>URL del servidor</strong> y la <strong>API Key</strong> en la sección "Instancia WhatsApp" más abajo.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card title="Información General">
+          <div className="space-y-4">
+            <Field label="Nombre">{tenant.name}</Field>
+            <Field label="Teléfono">{tenant.phone}</Field>
+            <Field label="Email">{tenant.email}</Field>
+            <Field label="Tenant ID">
+              <div className="flex items-center gap-2">
+                <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono break-all">{tenantId}</code>
+                <button onClick={() => { navigator.clipboard.writeText(tenantId); toast.success('Copiado') }} className="text-xs text-sb-primary hover:text-sb-secondary shrink-0">Copiar</button>
+              </div>
+            </Field>
+            <Field label="Estado">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant={STATUS_BADGE[currentStatus] ?? 'inactive'}>{STATUS_LABELS[currentStatus] ?? currentStatus}</Badge>
+                {!isOwner && currentStatus !== 'active' && (
+                  // DEV MODE: activación libre sin validar credenciales ni pago
+                  // PROD: restaurar check de hasEvolutionCredentials y pago
+                  <button
+                    onClick={() => setConfirmActivate(true)}
+                    className="text-xs font-medium transition-colors text-sb-primary hover:text-sb-secondary"
+                  >Activar</button>
+                )}
+                {!isOwner && currentStatus === 'active' && (
+                  <button onClick={() => setConfirmSuspend(true)} className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Suspender</button>
+                )}
+              </div>
+            </Field>
+            {!isOwner && (
+              <div className="pt-3 border-t border-gray-100">
+                <p className="text-xs text-gray-400 mb-2">Plan</p>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 px-3 py-1.5 border border-sb-primary/30 bg-sb-primary/5 rounded-lg text-sm text-sb-dark font-medium">
+                    Enterprise
+                  </div>
+                  <Button size="sm" loading={updatePlan.isPending} onClick={() => setConfirmPlan(true)} disabled={tenant.plan?.name === 'enterprise'}>
+                    {tenant.plan?.name === 'enterprise' ? 'Activo' : 'Asignar'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <Card title="Uso del Mes">
+          <div className="space-y-5">
+            <ProgressBar used={usedMsg} max={maxMsg === -1 ? -1 : maxMsg} label="Mensajes" />
+            <ProgressBar used={usedTok} max={maxTok === -1 ? -1 : maxTok} label="Tokens" />
+            <div className="pt-2 border-t border-gray-100">
+              <p className="text-xs text-gray-400">Próximo reset</p>
+              <p className="text-sm text-gray-700 mt-0.5">{nextMonthReset()}</p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+              <p className="text-xs text-gray-500">Mensajes: <span className="font-medium text-gray-700">{usedMsg.toLocaleString()}</span>{maxMsg !== -1 && <span className="text-gray-400"> / {maxMsg.toLocaleString()}</span>}</p>
+              <p className="text-xs text-gray-500">Tokens: <span className="font-medium text-gray-700">{usedTok.toLocaleString()}</span>{maxTok !== -1 && <span className="text-gray-400"> / {maxTok.toLocaleString()}</span>}</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card title="Configuración del Negocio">
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500">Define la identidad, horarios, catálogo, FAQs y comportamiento de la IA para este tenant.</p>
+            <Link to={`/tenants/${tenantId}/config`} className="flex items-center justify-between w-full px-4 py-3 bg-sb-primary/8 hover:bg-sb-primary/15 text-sb-primary rounded-lg transition-colors text-sm font-medium">
+              <span>Abrir configuración del negocio</span>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+            </Link>
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* QR Connection Card */}
+        <Card title="Conexión WhatsApp">
+          <WhatsAppConnectionCard tenantId={tenantId} />
+        </Card>
+
+        {/* Manual server config (for tenants with their own Evolution server) */}
+        <Card title="Servidor Evolution API (opcional)">
+          <form onSubmit={handleInstanceSave} className="space-y-4">
+            <p className="text-xs text-gray-400">
+              Deja vacío para usar el servidor global de SharkByte. Completa estos campos solo si el tenant tiene su propio servidor Evolution API.
+            </p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Nombre de instancia</label>
+              <input value={instanceName} onChange={(e) => setInstanceName(e.target.value)} placeholder="mi-empresa-whatsapp" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sb-primary" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">URL del servidor</label>
+              <input value={instanceApiUrl} onChange={(e) => setInstanceApiUrl(e.target.value)} placeholder="https://evolution.miservidor.com" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sb-primary" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">API Key</label>
+              <input type="password" value={instanceApiKey} onChange={(e) => setInstanceApiKey(e.target.value)} placeholder="Dejar vacío para no cambiar" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sb-primary" />
+            </div>
+            {instMsg && <p className={`text-xs ${instMsg.type === 'error' ? 'text-red-600' : 'text-sb-primary'}`}>{instMsg.text}</p>}
+            <Button type="submit" className="w-full justify-center" loading={updateInstance.isPending}>Guardar configuración</Button>
+          </form>
+        </Card>
+      </div>
+
+      {!isOwner && (
+        <>
+          <ConfirmModal open={confirmActivate} onClose={() => setConfirmActivate(false)} onConfirm={handleActivate}
+            title="Activar tenant" message={`¿Activar a "${tenant.name}"? El tenant podrá procesar mensajes inmediatamente.`}
+            confirmLabel="Activar" variant="primary" loading={activate.isPending} />
+
+          <ConfirmModal open={confirmSuspend} onClose={() => setConfirmSuspend(false)} onConfirm={handleSuspend}
+            title="Suspender tenant" message={`¿Suspender a "${tenant.name}"? No podrá procesar mensajes hasta ser reactivado.`}
+            confirmLabel="Suspender" variant="danger" loading={updateStatus.isPending} />
+
+          <ConfirmModal open={confirmPlan} onClose={() => setConfirmPlan(false)} onConfirm={handlePlanSave}
+            title="Asignar plan Enterprise" message={`¿Asignar el plan Enterprise a "${tenant.name}"? Este es el único plan disponible.`}
+            confirmLabel="Asignar Enterprise" variant="primary" loading={updatePlan.isPending} />
+        </>
+      )}
+    </div>
+  )
+}
