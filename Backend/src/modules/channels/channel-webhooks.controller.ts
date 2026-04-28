@@ -160,24 +160,35 @@ export class ChannelWebhooksController {
   async handleTikTok(@Body() body: any) {
     if (body?.type !== 'direct_message') return { status: 'ok' };
 
-    const tiktokAccountId = String(body?.recipient?.open_id ?? '');
+    const msg = body?.event?.message;
+    // Recipient can be in event.message.to_user.open_id or body.business_id
+    const tiktokAccountId = String(
+      msg?.to_user?.open_id ?? body?.business_id ?? '',
+    );
     if (!tiktokAccountId) return { status: 'ok' };
 
     const channel = await this.channelsService.findByTiktokAccountId(tiktokAccountId);
     if (!channel) return { status: 'ok' };
 
-    const text: string = body?.message?.text ?? '';
+    // Content is a JSON string: {"text": "..."}
+    let text = '';
+    try {
+      const contentObj = JSON.parse(msg?.content ?? '{}');
+      text = contentObj.text ?? '';
+    } catch {
+      text = msg?.content ?? '';
+    }
     if (!text.trim()) return { status: 'ok' };
 
     await this.forwardToN8n(channel, {
       platform: 'tiktok',
       tenantId: channel.tenantId,
-      senderId: String(body?.sender?.open_id ?? ''),
-      senderName: String(body?.sender?.display_name ?? ''),
-      messageId: String(body?.message?.message_id ?? ''),
+      senderId: String(msg?.from_user?.open_id ?? ''),
+      senderName: String(msg?.from_user?.display_name ?? ''),
+      messageId: String(msg?.message_id ?? ''),
       messageText: text,
-      messageType: 'text',
-      timestamp: body?.message?.create_time ?? Date.now(),
+      messageType: msg?.message_type ?? 'text',
+      timestamp: (msg?.create_time ?? Date.now()),
       tiktokAccountId,
     });
 

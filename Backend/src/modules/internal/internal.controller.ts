@@ -629,6 +629,89 @@ export class InternalController {
     }
   }
 
+  // n8n lee el estado de ventas de una conversación al inicio del flujo
+  @Get('conversations/state')
+  @ApiOperation({
+    summary: '[n8n] Obtener estado de ventas + últimos mensajes de una conversación',
+    description: 'Retorna salesStage, salesData, dealId y últimos N mensajes para que el agente tenga memoria.',
+  })
+  @ApiQuery({ name: 'tenantId', required: true })
+  @ApiQuery({ name: 'phone', required: true })
+  @ApiQuery({ name: 'platform', required: false })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async getConversationState(
+    @Query('tenantId') tenantId: string,
+    @Query('phone') phone: string,
+    @Query('platform') platform?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (!tenantId?.trim() || !phone?.trim()) {
+      throw new BadRequestException('tenantId y phone son requeridos');
+    }
+    return this.conversationsService.getSalesState(tenantId, phone, platform || 'whatsapp', Number(limit) || 10);
+  }
+
+  // n8n actualiza el estado de ventas después de evaluar la respuesta del agente
+  @Patch('conversations/state')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: '[n8n] Actualizar estado de ventas de una conversación',
+    description: 'Actualiza salesStage y salesData. n8n lo llama después de cada respuesta del agente.',
+  })
+  async updateConversationState(
+    @Body() body: {
+      tenantId: string;
+      phone: string;
+      platform?: string;
+      salesStage: string;
+      salesData?: Record<string, any>;
+      category?: string;
+      dealId?: string;
+    },
+  ) {
+    if (!body.tenantId?.trim() || !body.phone?.trim() || !body.salesStage?.trim()) {
+      throw new BadRequestException('tenantId, phone y salesStage son requeridos');
+    }
+    const result = await this.conversationsService.updateSalesState(
+      body.tenantId,
+      body.phone,
+      body.platform || 'whatsapp',
+      body.salesStage,
+      body.salesData,
+      { category: body.category, dealId: body.dealId },
+    );
+    return { ok: !!result, salesStage: body.salesStage };
+  }
+
+  // n8n avanza/cierra el deal de un contacto cuando cambia la etapa de la venta
+  @Patch('pipeline/deal/by-contact')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: '[n8n] Avanzar deal en pipeline por teléfono de contacto',
+    description: 'Mueve el deal abierto del contacto a otro stage o lo marca como won. n8n lo llama en transiciones de etapa.',
+  })
+  async advanceDealByContact(
+    @Body() body: {
+      tenantId: string;
+      phone: string;
+      stageId?: string;
+      status?: string;
+      value?: number;
+      saleId?: string;
+    },
+  ) {
+    if (!body.tenantId?.trim() || !body.phone?.trim()) {
+      throw new BadRequestException('tenantId y phone son requeridos');
+    }
+    const result = await this.conversationsService.advanceDeal(body.tenantId, body.phone, {
+      stageId: body.stageId,
+      status: body.status,
+      value: body.value,
+      saleId: body.saleId,
+    });
+    return { ok: true, dealId: (result as any)?._id?.toString() ?? null };
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // APPOINTMENTS — Agendamiento de citas
   // ─────────────────────────────────────────────────────────────────────────

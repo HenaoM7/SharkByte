@@ -18,6 +18,11 @@ export class LoggingInterceptor implements NestInterceptor {
     const req = context.switchToHttp().getRequest<Request>();
     const res = context.switchToHttp().getResponse<Response>();
 
+    // SSE — skip logging to avoid setHeader() after flushHeaders()
+    if ((req.headers['accept'] || '').includes('text/event-stream')) {
+      return next.handle();
+    }
+
     // Asignar trace ID a la request
     const traceId = (req.headers['x-trace-id'] as string) || randomUUID();
     req['traceId'] = traceId;

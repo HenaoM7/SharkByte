@@ -117,11 +117,11 @@ export class BillingService {
     planName: string,
     origin: string,
   ): Promise<{ url: string }> {
-    this.requireMp();
-
     if (!['pro', 'enterprise'].includes(planName)) {
       throw new BadRequestException(`Plan "${planName}" no es un plan de pago valido`);
     }
+
+    this.requireMp();
 
     const tenant = await this.tenantsService.findById(tenantId);
     if (!tenant) throw new NotFoundException(`Tenant ${tenantId} no encontrado`);
@@ -280,7 +280,8 @@ export class BillingService {
         throw new UnauthorizedException('Firma webhook MercadoPago invalida');
       }
     } else if (webhookSecret && !xSignature) {
-      this.logger.warn('Webhook MP recibido sin x-signature');
+      this.logger.error('Webhook MP recibido sin x-signature — rechazado');
+      throw new UnauthorizedException('Firma webhook MercadoPago requerida');
     }
 
     const type = body?.type;
@@ -331,13 +332,27 @@ export class BillingService {
         update.currentPeriodEnd = end;
       }
 
-      const updatedSub = await this.subscriptionModel.findOneAndUpdate({ _id: sub._id }, update, { new: true });
+      // Guardar el estado previo para determinar si es una nueva activación
+      const wasAlreadyAuthorized = sub.status === 'authorized';
 
       if (status === 'authorized') {
         const planName = sub.planName || 'enterprise';
+        // updatePlan upserta la suscripción con fechas aproximadas (Date.now).
+        // La actualización con fechas exactas de MP se aplica después para preservarlas.
         await this.tenantsService.updatePlan(sub.tenantId, planName);
         await this.tenantsService.updateStatus(sub.tenantId, 'active');
         this.logger.log(`Suscripcion autorizada: tenant=${sub.tenantId} plan=${planName} → activado`);
+      }
+
+      // Aplicar las fechas exactas de MP (sobrescribe las aproximadas de updatePlan)
+      const updatedSub = await this.subscriptionModel.findOneAndUpdate(
+        { tenantId: sub.tenantId },
+        update,
+        { new: true },
+      );
+
+      if (status === 'authorized' && !wasAlreadyAuthorized) {
+        // Solo enviar factura en la activación inicial, no en re-entregas del webhook
         try {
           const tenant = await this.tenantsService.findById(sub.tenantId);
           await this.sendInvoiceEmail(tenant, updatedSub || sub);

@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { PassportStrategy } from '@nestjs/passport';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { parse as parseCookies } from 'cookie';
 import { User } from '../../users/users.schema';
@@ -37,6 +37,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    if (!Types.ObjectId.isValid(payload.sub)) {
+      throw new UnauthorizedException('Token inválido');
+    }
     const user = await this.userModel.findById(payload.sub);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Token inválido o usuario inactivo');

@@ -91,19 +91,28 @@ temp/
 deploy.py
 deploy2.py
 deploy_channels.py
+deploy_workflows.py
+deploy_workflows_now.py
 check_pm2.py
 probe_auth.py
 probe_routes.py
 smoke_test.py
 smoke_test_v2.py
 launch_compass.ps1
+debug_runner*.py
+apply_*.py
 
-# Archivos de auditoría y salidas
+# Archivos de auditoría y salidas temporales
 audit_output.txt
 audit_api_output.txt
 audit_mongo_output.txt
 pm2_status.txt
 *.output
+*_full.txt
+*_parsed.json
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Scripts de deploy/audit internos (credenciales hardcodeadas)
+scripts/

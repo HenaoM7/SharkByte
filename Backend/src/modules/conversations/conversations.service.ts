@@ -46,15 +46,15 @@ export class ConversationsService {
     const { page = 1, limit = 50 } = opts;
     const skip = (page - 1) * limit;
     const filter = { conversationId: new Types.ObjectId(conversationId) };
-    const [data, total] = await Promise.all([
-      this.messageModel
-        .find(filter)
-        .sort({ createdAt: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      this.messageModel.countDocuments(filter),
-    ]);
+    const total = await this.messageModel.countDocuments(filter);
+    // Fetch latest `limit` messages sorted desc, then reverse for chronological display
+    const data = await this.messageModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .then((msgs) => msgs.reverse());
     return { data, total, page, totalPages: Math.ceil(total / limit) };
   }
 
@@ -78,9 +78,97 @@ export class ConversationsService {
       .lean();
   }
 
+  async updateCategory(conversationId: string, tenantId: string, category: string) {
+    return this.convModel
+      .findOneAndUpdate(
+        { _id: conversationId, tenantId },
+        { $set: { category } },
+        { new: true },
+      )
+      .lean();
+  }
+
+  // ── Sales State Machine ──────────────────────────────────────────────────────
+
+  async getSalesState(
+    tenantId: string,
+    contactPhone: string,
+    platform: string,
+    messageLimit = 10,
+  ) {
+    const channel = platform || 'whatsapp';
+    const conv = await this.convModel.findOne({ tenantId, contactPhone, channel }).lean();
+    if (!conv) {
+      return {
+        found: false,
+        conversationId: null,
+        salesStage: 'browsing',
+        salesData: {},
+        dealId: '',
+        category: 'sales',
+        messages: [],
+      };
+    }
+    const messages = await this.messageModel
+      .find({ conversationId: (conv as any)._id })
+      .sort({ createdAt: -1 })
+      .limit(messageLimit)
+      .lean()
+      .then((msgs) => msgs.reverse());
+
+    return {
+      found: true,
+      conversationId: (conv as any)._id.toString(),
+      salesStage: (conv as any).salesStage || 'browsing',
+      salesData: (conv as any).salesData || {},
+      dealId: (conv as any).dealId || '',
+      category: (conv as any).category || 'sales',
+      messages: messages.map((m) => ({
+        sender: m.sender,
+        content: m.content,
+        type: m.type,
+        mediaUrl: m.mediaUrl,
+        createdAt: (m as any).createdAt,
+      })),
+    };
+  }
+
+  async updateSalesState(
+    tenantId: string,
+    contactPhone: string,
+    platform: string,
+    salesStage: string,
+    salesData?: Record<string, any>,
+    extra?: { category?: string; dealId?: string },
+  ) {
+    const channel = platform || 'whatsapp';
+    const $set: any = { salesStage };
+    if (extra?.category) $set.category = extra.category;
+    if (extra?.dealId) $set.dealId = extra.dealId;
+
+    if (salesData && Object.keys(salesData).length > 0) {
+      Object.entries(salesData).forEach(([k, v]) => {
+        $set[`salesData.${k}`] = v;
+      });
+    }
+
+    return this.convModel
+      .findOneAndUpdate({ tenantId, contactPhone, channel }, { $set }, { new: true })
+      .lean();
+  }
+
+  async advanceDeal(
+    tenantId: string,
+    contactPhone: string,
+    opts: { stageId?: string; status?: string; value?: number; saleId?: string },
+  ) {
+    return this.pipelineService.advanceDealByContact(tenantId, contactPhone, opts);
+  }
+
   async upsert(dto: UpsertConversationDto): Promise<{ conversation: any; message: any }> {
     const now = new Date();
-    const snippet = (dto.message || '').substring(0, 100);
+    const TYPE_LABEL: Record<string, string> = { image: '[Imagen]', audio: '[Audio]', document: '[Documento]' };
+    const snippet = dto.message?.substring(0, 100) || TYPE_LABEL[dto.type || ''] || '';
 
     const channel = dto.platform ?? 'whatsapp';
     const conversation = await this.convModel.findOneAndUpdate(
@@ -101,13 +189,15 @@ export class ConversationsService {
       { upsert: true, new: true },
     );
 
+    // Save message when there is text content OR when there is media (image/audio/document)
+    const hasContent = !!(dto.message || (dto.mediaUrl && dto.type && dto.type !== 'text'));
     let message: any = null;
-    if (dto.message) {
+    if (hasContent) {
       message = await this.messageModel.create({
         conversationId: conversation._id,
         tenantId: dto.tenantId,
         sender: dto.sender || 'client',
-        content: dto.message,
+        content: dto.message || '',
         type: dto.type || 'text',
         mediaUrl: dto.mediaUrl || '',
       });

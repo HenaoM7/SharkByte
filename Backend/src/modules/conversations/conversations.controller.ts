@@ -3,6 +3,7 @@ import {
   DefaultValuePipe, ParseIntPipe, Sse, BadRequestException, NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Observable } from 'rxjs';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -41,6 +42,7 @@ export class ConversationsController {
   }
 
   @Get(':id/messages')
+  @SkipThrottle()
   @ApiOperation({ summary: 'Mensajes de una conversación' })
   @ApiQuery({ name: 'tenantId', required: true })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -75,6 +77,27 @@ export class ConversationsController {
     return result;
   }
 
+  @Patch(':id/category')
+  @Roles('super_admin', 'admin', 'owner')
+  @ApiOperation({ summary: 'Cambiar categoría de una conversación' })
+  @ApiQuery({ name: 'tenantId', required: true })
+  @ApiBody({ schema: { properties: { category: { type: 'string', enum: ['general', 'support', 'sales', 'inquiry', 'complaint'] } }, required: ['category'] } })
+  async updateCategory(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Query('tenantId') tenantId: string,
+    @Body('category') category: string,
+  ) {
+    if (!tenantId) throw new BadRequestException('tenantId es requerido');
+    if (!['general', 'support', 'sales', 'inquiry', 'complaint'].includes(category)) {
+      throw new BadRequestException('category debe ser: general, support, sales, inquiry o complaint');
+    }
+    this.assertOwnership(req.user, tenantId);
+    const result = await this.conversationsService.updateCategory(id, tenantId, category);
+    if (!result) throw new NotFoundException('Conversación no encontrada');
+    return result;
+  }
+
   @Patch(':id/status')
   @Roles('super_admin', 'admin', 'owner')
   @ApiOperation({ summary: 'Cambiar estado de una conversación' })
@@ -97,10 +120,12 @@ export class ConversationsController {
   }
 
   // Server-Sent Events — real-time updates for the chat view
+  @SkipThrottle() // Long-lived connection — must never be rate-limited
   @Sse('stream')
   @ApiOperation({ summary: 'SSE stream de nuevos mensajes por tenant' })
   @ApiQuery({ name: 'tenantId', required: true })
   stream(@Query('tenantId') tenantId: string, @Req() req: Request): Observable<any> {
+    if (!tenantId) throw new BadRequestException('tenantId requerido');
     return new Observable((observer) => {
       const handler = (data: any) => {
         if (data.tenantId === tenantId) {
@@ -108,7 +133,14 @@ export class ConversationsController {
         }
       };
       conversationEmitter.on('new_message', handler);
+
+      // Heartbeat every 25s to keep connection alive through proxies
+      const heartbeat = setInterval(() => {
+        observer.next({ data: ':ping' });
+      }, 25000);
+
       req.on('close', () => {
+        clearInterval(heartbeat);
         conversationEmitter.off('new_message', handler);
         observer.complete();
       });

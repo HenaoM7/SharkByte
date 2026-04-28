@@ -137,4 +137,30 @@ export class PipelineService {
       .sort({ createdAt: -1 })
       .lean();
   }
+
+  /**
+   * Avanza o cierra el deal abierto de un contacto.
+   * Usado por la máquina de estados de ventas desde n8n.
+   */
+  async advanceDealByContact(
+    tenantId: string,
+    contactPhone: string,
+    opts: { stageId?: string; status?: string; value?: number; saleId?: string },
+  ) {
+    const pipeline = await this.getOrCreateDefault(tenantId);
+    const pipelineId = (pipeline as any)._id;
+    const $set: any = {};
+    if (opts.stageId) $set.stageId = opts.stageId;
+    if (opts.status) $set.status = opts.status;
+    if (opts.value !== undefined && opts.value !== null) $set.value = opts.value;
+    if (opts.saleId) $set.saleId = opts.saleId;
+    if (!Object.keys($set).length) return null;
+    return this.dealModel
+      .findOneAndUpdate(
+        { tenantId, pipelineId, contactPhone, status: 'open' },
+        { $set },
+        { new: true, sort: { createdAt: -1 } },
+      )
+      .lean();
+  }
 }

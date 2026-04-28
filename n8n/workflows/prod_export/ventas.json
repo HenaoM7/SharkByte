@@ -29,7 +29,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Lee el catalogo desde businessConfig enviado por el Router\n// (el Router ya cargo los productos via /internal/tenant/by-instance)\nconst data = $('Recibir Datos del Router').first().json;\nconst catalog = data.businessConfig?.catalog || [];\nif (catalog.length > 0) {\n  return catalog.map(p => ({ json: p }));\n}\nreturn [{ json: { name: 'Sin productos configurados', description: '', price: 0 } }];\n"
+        "jsCode": "// Normaliza el catalogo desde businessConfig y lo pasa como campo unico\n// Preserva businessConfig completo (incluye salesConfig, paymentConfig, etc.)\nconst data = $('Recibir Datos del Router').first().json;\nconst bc = data.businessConfig || {};\nconst staticCatalog = bc.catalog || data.catalog || [];\nreturn [{ json: { ...data, catalog: staticCatalog } }];\n"
       }
     },
     {
@@ -42,7 +42,7 @@
         304
       ],
       "parameters": {
-        "jsCode": "// Sub-workflow: Ventas\nvar input = $(\"Recibir Datos del Router\").first().json;\n\n// Productos del backend\nvar productosBackend = [];\ntry {\n  var pNode = $('Buscar Productos Backend').first().json;\n  if (pNode && pNode.products && Array.isArray(pNode.products)) productosBackend = pNode.products;\n} catch(e) {}\n\nvar catalogoEstatico = Array.isArray(input.catalog) ? input.catalog : [];\n\nvar catalogText = '';\nif (productosBackend.length > 0) {\n  catalogText = 'CATALOGO (habla SOLO de estos productos):\\n';\n  productosBackend.forEach(function(p) {\n    catalogText += '- ' + p.name;\n    if (p.category) catalogText += ' [' + p.category + ']';\n    if (p.price) catalogText += ' $' + Number(p.price).toLocaleString('es-CO');\n    if (p.comparePrice && p.comparePrice > p.price) catalogText += ' (antes $' + Number(p.comparePrice).toLocaleString('es-CO') + ')';\n    if (p.sku) catalogText += ' SKU:' + p.sku;\n    if (p.description) catalogText += ' | ' + p.description;\n    if (!p.available) catalogText += ' [NO DISPONIBLE]';\n    if (p.stock !== null && p.stock !== undefined && p.stock <= 5) catalogText += ' [Ultimas ' + p.stock + ' unidades]';\n    catalogText += '\\n';\n  });\n} else if (catalogoEstatico.length > 0) {\n  catalogText = 'CATALOGO (habla SOLO de estos productos):\\n';\n  catalogoEstatico.forEach(function(item) {\n    catalogText += '- ' + item.name;\n    if (item.price) catalogText += ' $' + Number(item.price).toLocaleString('es-CO');\n    if (item.category) catalogText += ' (' + item.category + ')';\n    if (item.description) catalogText += ': ' + item.description;\n    if (!item.available) catalogText += ' [NO DISPONIBLE]';\n    catalogText += '\\n';\n  });\n} else {\n  catalogText = 'No hay productos en el catalogo por el momento.';\n}\n\nvar faqText = '';\nvar faqItems = Array.isArray(input.faq) ? input.faq : [];\nfaqText = faqItems.length > 0\n  ? faqItems.map(function(f) { return 'P: ' + f.question + '\\nR: ' + f.answer; }).join('\\n\\n')\n  : 'Sin preguntas frecuentes.';\n\nvar allowedText = Array.isArray(input.allowedActions) && input.allowedActions.length > 0\n  ? input.allowedActions.map(function(a) { return '- ' + a; }).join('\\n')\n  : '- Informar sobre productos y precios\\n- Tomar pedidos';\n\nvar restrictText = Array.isArray(input.restrictions) && input.restrictions.length > 0\n  ? input.restrictions.map(function(r) { return '- ' + r; }).join('\\n')\n  : '- No revelar informacion confidencial';\n\n// Negocio\nvar businessConfig = (input.businessConfig) || {};\nvar addressParts = [];\nvar ba = businessConfig.businessAddress || {};\nif (ba.street) addressParts.push(ba.street);\nif (ba.city) addressParts.push(ba.city);\nif (ba.state) addressParts.push(ba.state);\nif (ba.reference) addressParts.push('Ref: ' + ba.reference);\nvar locationText = addressParts.length > 0\n  ? addressParts.join(', ')\n  : (input.location || businessConfig.location || '');\n\n// Ventas config\nvar salesConfig = businessConfig.salesConfig || {};\nvar requireCustomerName = salesConfig.requireCustomerName === true;\nvar requireCustomerAddress = salesConfig.requireCustomerAddress === true;\nvar requireCustomerId = salesConfig.requireCustomerId === true;\nvar deliveryFee = salesConfig.deliveryFee || 0;\nvar deliveryType = salesConfig.deliveryType || 'both';\nvar confirmationInstructions = salesConfig.confirmationInstructions || '';\n\n// Pago\nvar paymentConfig = businessConfig.paymentConfig || {};\nvar hasQrImage = !!(paymentConfig.qrImageUrl);\nvar paymentMethodsText = Array.isArray(input.paymentMethods) && input.paymentMethods.length > 0\n  ? input.paymentMethods.join(', ')\n  : '';\n\n// ─── DATOS OBLIGATORIOS DEL CLIENTE ────────────────────────────────────────\nvar requiredFields = [];\nif (requireCustomerName) requiredFields.push('Nombre completo');\nif (requireCustomerId) requiredFields.push('Numero de cedula o documento de identidad');\nif (requireCustomerAddress) requiredFields.push('Direccion completa de entrega: calle/carrera + barrio + ciudad + referencia (TODO en un campo)');\n\nvar dataRulesText = '';\nif (requiredFields.length > 0) {\n  dataRulesText += '\\n\\n=== DATOS OBLIGATORIOS DEL CLIENTE (maxima prioridad) ===\\n';\n  dataRulesText += 'Antes de confirmar el pedido, debes tener EXACTAMENTE estos datos:\\n';\n  requiredFields.forEach(function(f, i) { dataRulesText += (i+1) + '. ' + f + '\\n'; });\n  dataRulesText += '\\nREGLAS ESTRICTAS:\\n';\n  dataRulesText += '- Pide SOLO los ' + requiredFields.length + ' datos de la lista anterior + la talla/variante del producto si aplica.\\n';\n  dataRulesText += '- NO pidas \"ciudad de entrega\" por separado (ya esta incluida en la direccion completa).\\n';\n  dataRulesText += '- NO pidas \"metodo de pago\" si el cliente ya lo menciono o si el negocio tiene metodo definido.\\n';\n  dataRulesText += '- NO confirmes el pedido hasta tener los ' + requiredFields.length + ' datos.\\n';\n  dataRulesText += '- NO inventes ni asumas datos del cliente.\\n';\n  if (confirmationInstructions) {\n    dataRulesText += '\\nGuia de comportamiento del negocio (NO es una lista de campos adicionales, son instrucciones de estilo):\\n';\n    // Extract only the style/behavior parts, ignoring field lists\n    dataRulesText += confirmationInstructions + '\\n';\n  }\n}\n\n// Entregas\nvar deliveryText = '';\nif (deliveryFee > 0) deliveryText += '\\nCosto de domicilio: $' + Number(deliveryFee).toLocaleString('es-CO') + '\\n';\nif (deliveryType === 'pickup') deliveryText += 'Solo recogida en tienda.\\n';\nelse if (deliveryType === 'delivery') deliveryText += 'Solo domicilio.\\n';\n\n// Datos bancarios\nvar paymentBankText = '';\nif (paymentConfig.accountNumber || hasQrImage) {\n  paymentBankText = '\\n\\nDATOS BANCARIOS PARA TRANSFERENCIA:\\n';\n  if (paymentConfig.bankName) paymentBankText += '- Banco: ' + paymentConfig.bankName + '\\n';\n  if (paymentConfig.accountNumber) {\n    var tipo = paymentConfig.accountType === 'checking' ? 'Corriente' : 'Ahorros';\n    paymentBankText += '- Cuenta ' + tipo + ': ' + paymentConfig.accountNumber + '\\n';\n  }\n  if (paymentConfig.accountHolder) paymentBankText += '- Titular: ' + paymentConfig.accountHolder + '\\n';\n  if (hasQrImage) paymentBankText += '- QR disponible (se envia automaticamente al cliente)\\n';\n}\n\n// QR: trigger amplio — cualquier mención de pago/transferencia\nvar qrInstructionText = '';\nif (hasQrImage) {\n  qrInstructionText = '\\n\\n=== ENVIO AUTOMATICO DEL QR DE PAGO ===\\n';\n  qrInstructionText += 'Cuando el cliente mencione O pregunte sobre: transferencia, Nequi, Bancolombia, QR, pago, consignar, pagar, metodo de pago —\\n';\n  qrInstructionText += 'DEBES escribir [ENVIAR_QR] como PRIMERA linea de tu respuesta (antes de cualquier texto).\\n';\n  qrInstructionText += 'Formato correcto:\\n[ENVIAR_QR]\\nTu respuesta normal aqui...\\n';\n  qrInstructionText += 'El sistema enviara automaticamente la imagen QR al cliente.\\n';\n}\n\n// Confirmacion de venta\n// {{ y }} → { y } en el prompt (escape LangChain template)\nvar confirmationTagText = '';\nif (paymentConfig.confirmationMethod === 'manual' || !paymentConfig.confirmationMethod) {\n  confirmationTagText = '\\n\\n=== CUANDO EL CLIENTE CONFIRME EL PAGO ===\\n';\n  confirmationTagText += 'Cuando el cliente envie comprobante, foto de transferencia, o diga que ya pago,\\n';\n  confirmationTagText += 'escribe en la PRIMERA linea:\\n';\n  confirmationTagText += '[VENTA_CONFIRMADA]{{\"clientName\":\"<nombre>\",\"clientId\":\"<cedula>\",\"clientAddress\":\"<direccion>\",\"productName\":\"<producto>\",\"productDetails\":\"<detalle: talla, color>\",\"quantity\":1,\"totalAmount\":null,\"paymentMessage\":\"<descripcion del pago>\"}}\\n';\n  confirmationTagText += 'Luego la respuesta de confirmacion al cliente.\\n';\n  confirmationTagText += 'IMPORTANTE: JSON valido, comillas dobles, null para numeros desconocidos.';\n}\n\nvar systemMessage =\n  (input.aiInstructions || 'Eres un asistente de ventas profesional y amable.') +\n  '\\n\\nCliente en esta conversacion: ' + (input.pushName || 'Cliente') +\n\n  dataRulesText +\n\n  '\\n\\n' + catalogText +\n  '\\n\\nFAQ:\\n' + faqText +\n  (paymentMethodsText ? '\\n\\nMETODOS DE PAGO: ' + paymentMethodsText : '') +\n  (locationText ? '\\n\\nUBICACION: ' + locationText : '') +\n  deliveryText +\n  paymentBankText +\n  qrInstructionText +\n  confirmationTagText +\n\n  '\\n\\nACCIONES PERMITIDAS:\\n' + allowedText +\n  '\\n\\nRESTRICCIONES:\\n' + restrictText +\n  '\\n\\nMENSAJE DEL CLIENTE: \"' + (input.message || '') + '\"';\n\nreturn [{\n  json: {\n    phone: input.phone,\n    tenantId: input.tenantId,\n    instanceName: input.instanceName,\n    pushName: input.pushName,\n    message: input.message,\n    intent: input.intent,\n    confidence: input.confidence,\n    evolutionApiUrl: input.evolutionApiUrl,\n    evolutionApiKey: input.evolutionApiKey,\n    tenantEmail: input.tenantEmail || '',\n    businessName: (businessConfig.businessName) || '',\n    paymentQrImageUrl: (paymentConfig.qrImageUrl) || '',\n    systemMessage: systemMessage\n  }\n}];"
+        "jsCode": "// Sub-workflow: Ventas\nvar routerData = $(\"Recibir Datos del Router\").first().json;\nvar inputNode = $input.first().json;\nvar input = Object.assign({}, routerData);\n// Override message for payment receipt images (bypassed Vision path)\nif (inputNode && inputNode.messageOverride) input.message = inputNode.messageOverride;\nvar businessConfig = input.businessConfig || {};\nvar salesConfig = businessConfig.salesConfig || {};\nvar paymentConfig = businessConfig.paymentConfig || {};\n\n// ─── CATALOGO ────────────────────────────────────────────────────────────────\nvar productosBackend = [];\ntry {\n  var pNode = $('Buscar Productos Backend').first().json;\n  if (pNode && pNode.products && Array.isArray(pNode.products)) productosBackend = pNode.products;\n} catch(e) {}\n\nvar catalogoEstatico = Array.isArray(input.catalog) ? input.catalog : (Array.isArray(businessConfig.catalog) ? businessConfig.catalog : []);\n\nvar catalogText = '';\nif (productosBackend.length > 0) {\n  catalogText = 'CATALOGO REAL (habla SOLO de estos productos, con precios y datos exactos):\\n';\n  productosBackend.forEach(function(p) {\n    catalogText += '- ' + p.name;\n    if (p.category) catalogText += ' [' + p.category + ']';\n    if (p.price) catalogText += ' — $' + Number(p.price).toLocaleString('es-CO') + ' COP';\n    if (p.comparePrice && p.comparePrice > p.price) catalogText += ' (antes $' + Number(p.comparePrice).toLocaleString('es-CO') + ')';\n    if (p.sku) catalogText += ' | SKU: ' + p.sku;\n    if (p.stock !== null && p.stock !== undefined) {\n      if (p.stock === 0) catalogText += ' [AGOTADO]';\n      else if (p.stock <= 5) catalogText += ' [Ultimas ' + p.stock + ' unidades]';\n    }\n    if (p.available === false) catalogText += ' [NO DISPONIBLE]';\n    if (p.description) catalogText += '\\n  ' + String(p.description);\n    catalogText += '\\n';\n  });\n} else if (catalogoEstatico.length > 0) {\n  catalogText = 'CATALOGO (habla SOLO de estos productos):\\n';\n  catalogoEstatico.forEach(function(item) {\n    catalogText += '- ' + item.name;\n    if (item.price) catalogText += ' — $' + Number(item.price).toLocaleString('es-CO') + ' COP';\n    if (item.category) catalogText += ' [' + item.category + ']';\n    if (item.description) catalogText += ': ' + String(item.description).substring(0, 100);\n    if (item.available === false) catalogText += ' [NO DISPONIBLE]';\n    catalogText += '\\n';\n  });\n} else {\n  catalogText = 'No hay productos en el catalogo por el momento.';\n}\n\n// ─── FAQ ─────────────────────────────────────────────────────────────────────\nvar faqItems = Array.isArray(input.faq) ? input.faq : (Array.isArray(businessConfig.faq) ? businessConfig.faq : []);\nvar faqText = faqItems.length > 0\n  ? faqItems.map(function(f) { return 'P: ' + f.question + '\\nR: ' + f.answer; }).join('\\n\\n')\n  : 'Sin preguntas frecuentes.';\n\n// ─── ACCIONES Y RESTRICCIONES ─────────────────────────────────────────────────\nvar allowedText = Array.isArray(input.allowedActions) && input.allowedActions.length > 0\n  ? input.allowedActions.map(function(a) { return '- ' + a; }).join('\\n')\n  : '- Informar sobre productos y precios\\n- Tomar pedidos';\n\nvar restrictText = Array.isArray(input.restrictions) && input.restrictions.length > 0\n  ? input.restrictions.map(function(r) { return '- ' + r; }).join('\\n')\n  : '- No revelar informacion confidencial';\n\n// Palabras prohibidas del negocio\nvar prohibitedWords = Array.isArray(businessConfig.prohibitedWords) ? businessConfig.prohibitedWords : [];\nif (prohibitedWords.length > 0) {\n  restrictText += '\\n- PALABRAS PROHIBIDAS (nunca usar estas palabras): ' + prohibitedWords.join(', ');\n}\n\n// ─── UBICACION ───────────────────────────────────────────────────────────────\nvar addressParts = [];\nvar ba = businessConfig.businessAddress || {};\nif (ba.street) addressParts.push(ba.street);\nif (ba.city) addressParts.push(ba.city.trim());\nif (ba.state) addressParts.push(ba.state.trim());\nif (ba.reference) addressParts.push('Ref: ' + ba.reference);\nvar locationText = addressParts.length > 0\n  ? addressParts.join(', ')\n  : (input.location || businessConfig.location || '');\n\n// ─── HORARIO REAL DEL NEGOCIO ─────────────────────────────────────────────────\nvar hoursText = '';\nvar bhConfig = businessConfig.businessHours || input.businessHours || {};\nif (bhConfig.schedule && Array.isArray(bhConfig.schedule)) {\n  hoursText = '\\n\\nHORARIO DE ATENCION:\\n';\n  bhConfig.schedule.forEach(function(day) {\n    if (day.isOpen) {\n      hoursText += day.day + ': ' + day.open + ' - ' + day.close + '\\n';\n    } else {\n      hoursText += day.day + ': Cerrado\\n';\n    }\n  });\n  if (bhConfig.timezone) hoursText += '(Zona horaria: ' + bhConfig.timezone + ')\\n';\n}\n\n// ─── AGENTES HUMANOS ──────────────────────────────────────────────────────────\nvar humanAgentsText = '';\nvar allAgents = Array.isArray(input.humanAgents) ? input.humanAgents : (Array.isArray(businessConfig.humanAgents) ? businessConfig.humanAgents : []);\nvar availableAgents = allAgents.filter(function(a) { return a.available; });\nif (availableAgents.length > 0) {\n  humanAgentsText = '\\n\\nESCALACION A AGENTE HUMANO:\\n';\n  humanAgentsText += 'Si el cliente pide hablar con una persona, lo solicita explicitamente, o la situacion es compleja, indica que puede contactar a:\\n';\n  availableAgents.forEach(function(a) {\n    humanAgentsText += '- ' + a.name + ': ' + a.phone + '\\n';\n  });\n  humanAgentsText += 'Nunca inventes informacion que no tienes — ofrece escalar al agente humano si no puedes resolver.\\n';\n}\n\n// ─── METODOS DE PAGO ──────────────────────────────────────────────────────────\nvar paymentMethodsText = Array.isArray(input.paymentMethods) && input.paymentMethods.length > 0\n  ? input.paymentMethods.join(', ')\n  : '';\n\n// ─── DATOS BANCARIOS ─────────────────────────────────────────────────────────\nvar hasQrImage = !!(paymentConfig.qrImageUrl);\nvar paymentBankText = '';\nif (paymentConfig.accountNumber || hasQrImage) {\n  paymentBankText = '\\n\\nDATOS PARA PAGO:\\n';\n  if (paymentConfig.bankName) paymentBankText += '- ' + paymentConfig.bankName + ': ' + (paymentConfig.accountNumber || '') + '\\n';\n  if (paymentConfig.accountHolder) paymentBankText += '- Titular: ' + paymentConfig.accountHolder + '\\n';\n  var tipo = paymentConfig.accountType === 'checking' ? 'Cuenta Corriente' : 'Cuenta Ahorros';\n  if (paymentConfig.accountNumber) paymentBankText += '- Tipo: ' + tipo + '\\n';\n  if (hasQrImage) paymentBankText += '- QR de pago disponible (se envia automaticamente)\\n';\n}\n\n// ─── ENTREGA ─────────────────────────────────────────────────────────────────\nvar deliveryFee = salesConfig.deliveryFee || 0;\nvar deliveryType = salesConfig.deliveryType || 'both';\nvar deliveryText = '';\nif (deliveryFee > 0) deliveryText += '\\nCosto de domicilio: $' + Number(deliveryFee).toLocaleString('es-CO') + ' COP\\n';\nif (deliveryType === 'pickup') deliveryText += 'Solo recogida en tienda.\\n';\nelse if (deliveryType === 'delivery') deliveryText += 'Solo domicilio a domicilio.\\n';\n\n// ─── DATOS REQUERIDOS DEL CLIENTE ────────────────────────────────────────────\nvar requireCustomerName = salesConfig.requireCustomerName === true;\nvar requireCustomerAddress = salesConfig.requireCustomerAddress === true;\nvar requireCustomerId = salesConfig.requireCustomerId === true;\nvar confirmationInstructions = salesConfig.confirmationInstructions || '';\n\nvar requiredFields = [];\nif (requireCustomerName) requiredFields.push('Nombre completo del cliente');\nif (requireCustomerId) requiredFields.push('Numero de cedula o documento de identidad');\nif (requireCustomerAddress) requiredFields.push('Direccion completa de entrega (calle/carrera + barrio + ciudad + referencia en un solo campo)');\n\nvar dataRulesText = '';\nif (requiredFields.length > 0) {\n  dataRulesText += '\\n\\n=== FLUJO DE PEDIDO — REGLAS ABSOLUTAS ===\\n';\n  dataRulesText += 'ESTAS REGLAS ANULAN cualquier otro flujo de pedido mencionado en las instrucciones del negocio.\\n\\n';\n  dataRulesText += 'PASO 1 — SELECCION DEL PRODUCTO:\\n';\n  dataRulesText += 'Cuando el cliente quiere comprar, asegurate de tener claro: producto + talla (si aplica).\\n';\n  dataRulesText += 'Si no ha mencionado la talla y el producto la requiere, pregunta primero.\\n\\n';\n  dataRulesText += 'PASO 2 — DATOS DEL CLIENTE (pide estos ' + requiredFields.length + ' datos):\\n';\n  requiredFields.forEach(function(f, i) { dataRulesText += (i+1) + '. ' + f + '\\n'; });\n  dataRulesText += '\\nREGLAS ESTRICTAS:\\n';\n  dataRulesText += '- Pide TODOS los datos faltantes en un solo mensaje.\\n';\n  dataRulesText += '- RECOLECCION INCREMENTAL: cuando el cliente proporcione datos parciales, confirma exactamente lo recibido y pide SOLO lo que falta.\\n';\n  dataRulesText += '- NO vuelvas a pedir un dato que el cliente ya proporciono en mensajes anteriores.\\n';\n  dataRulesText += '- NO inventes ni asumas datos del cliente.\\n';\n  dataRulesText += '- La ciudad de entrega ya esta incluida en la direccion completa, NO la pidas por separado.\\n';\n  dataRulesText += '- NO pidas metodo de pago por separado; el negocio acepta los metodos ya informados.\\n\\n';\n  dataRulesText += 'PASO 3 — CONFIRMACION DEL PEDIDO:\\n';\n  dataRulesText += 'Cuando tengas el producto (+ talla) + los ' + requiredFields.length + ' datos del cliente:\\n';\n  dataRulesText += '1. Escribe [ENVIAR_QR] como PRIMERA linea (antes de cualquier texto)\\n';\n  dataRulesText += '2. Confirma el resumen completo del pedido:\\n';\n  dataRulesText += '   - Producto y talla\\n';\n  dataRulesText += '   - Datos del cliente (nombre, cedula, direccion)\\n';\n  dataRulesText += '   - Total: precio del producto + costo domicilio ($' + Number(deliveryFee).toLocaleString('es-CO') + ' COP)\\n';\n  dataRulesText += '3. Indica los datos de pago e informa que se envia el QR\\n';\n  dataRulesText += '4. Solicita el comprobante de pago para finalizar\\n';\n  if (confirmationInstructions) {\n    dataRulesText += '\\nGuia adicional del negocio:\\n' + confirmationInstructions + '\\n';\n  }\n}\n\n// ─── QR DE PAGO ───────────────────────────────────────────────────────────────\nvar qrInstructionText = '';\nif (hasQrImage) {\n  qrInstructionText = '\\n\\n=== ENVIO DEL QR DE PAGO ===\\n';\n  qrInstructionText += 'Escribe [ENVIAR_QR] como PRIMERA linea en estos casos:\\n';\n  qrInstructionText += '1. Al confirmar el pedido completo (PASO 3 de arriba)\\n';\n  qrInstructionText += '2. Cuando el cliente pregunta sobre: pago, transferencia, Nequi, Bancolombia, QR, como pagar\\n';\n  qrInstructionText += 'Formato: [ENVIAR_QR]\\n(tu respuesta aqui)\\n';\n}\n\n// ─── CONFIRMACION DE VENTA (pago recibido) ────────────────────────────────────\nvar confirmationTagText = '';\nif (paymentConfig.confirmationMethod === 'manual' || !paymentConfig.confirmationMethod) {\n  confirmationTagText = '\\n\\n=== CUANDO EL CLIENTE CONFIRME EL PAGO ===\\n';\n  confirmationTagText += 'SOLO cuando el cliente envie comprobante de pago, foto de transferencia, o diga explicitamente que ya pago,\\n';\n  confirmationTagText += 'escribe en la PRIMERA linea:\\n';\n  confirmationTagText += '[VENTA_CONFIRMADA]{{\"clientName\":\"<nombre completo>\",\"clientId\":\"<cedula>\",\"clientAddress\":\"<direccion>\",\"productName\":\"<producto>\",\"productDetails\":\"<talla/color>\",\"quantity\":1,\"totalAmount\":null,\"paymentMessage\":\"<descripcion breve del pago>\"}}\\n';\n  confirmationTagText += 'Luego el mensaje de agradecimiento al cliente.\\n';\n  confirmationTagText += 'SOLO usar [VENTA_CONFIRMADA] cuando el pago este confirmado — NO antes.\\n';\n  confirmationTagText += 'JSON con comillas dobles, null para valores desconocidos.';\n}\n\n// ─── FORMATO WHATSAPP ─────────────────────────────────────────────────────────\nvar formatRules = '\\n\\n=== FORMATO DE RESPUESTA (OBLIGATORIO) ===\\n';\nformatRules += 'Estas conversando por WhatsApp. Usa SOLO formato compatible con WhatsApp:\\n';\nformatRules += '- Negrilla: *texto* (UN solo asterisco por lado, NO dos **)\\n';\nformatRules += '- Italica: _texto_\\n';\nformatRules += '- NO uses ## headings, NO uses **texto**, NO uses markdown de GitHub/HTML\\n';\nformatRules += '- Cuando el cliente pregunta por un producto especifico, incluye TODA la informacion disponible:\\n';\nformatRules += '  * Nombre, precio, descripcion completa\\n';\nformatRules += '  * Tallas disponibles (todas las que esten en la descripcion)\\n';\nformatRules += '  * Colores disponibles\\n';\nformatRules += '  * Materiales y caracteristicas\\n';\nformatRules += '  * Stock si es limitado\\n';\nformatRules += 'Ejemplo de formato correcto para producto:\\n';\nformatRules += '*Chaqueta Windbreaker White Atlas*\\n';\nformatRules += 'Precio: $188.994 COP\\n';\nformatRules += 'Descripcion: [descripcion completa]\\n';\nformatRules += 'Tallas: S, L, XL\\n';\nformatRules += 'Colores: Blanco\\n';\n\n// ─── MENSAJE SISTEMA ─────────────────────────────────────────────────────────\nvar systemMessage =\n  (input.aiInstructions || businessConfig.aiInstructions || 'Eres un asistente de ventas profesional y amable.') +\n  '\\n\\nCliente en esta conversacion: ' + (input.pushName || 'Cliente') +\n\n  formatRules +\n  dataRulesText +\n\n  '\\n\\n' + catalogText +\n  '\\n\\nFAQ:\\n' + faqText +\n  (paymentMethodsText ? '\\n\\nMETODOS DE PAGO ACEPTADOS: ' + paymentMethodsText : '') +\n  (locationText ? '\\n\\nUBICACION DE LA TIENDA: ' + locationText : '') +\n  hoursText +\n  deliveryText +\n  paymentBankText +\n  humanAgentsText +\n  qrInstructionText +\n  confirmationTagText +\n\n  '\\n\\nACCIONES PERMITIDAS:\\n' + allowedText +\n  '\\n\\nRESTRICCIONES:\\n' + restrictText +\n  '\\n\\nMENSAJE DEL CLIENTE: \"' + (input.message || '') + '\"';\n\nreturn [{\n  json: {\n    phone: input.phone,\n    tenantId: input.tenantId,\n    instanceName: input.instanceName,\n    pushName: input.pushName,\n    message: input.message,\n    intent: input.intent,\n    confidence: input.confidence,\n    evolutionApiUrl: input.evolutionApiUrl,\n    evolutionApiKey: input.evolutionApiKey,\n    tenantEmail: input.tenantEmail || '',\n    businessName: businessConfig.businessName || input.businessName || '',\n    paymentQrImageUrl: paymentConfig.qrImageUrl || '',\n    systemMessage: systemMessage\n  }\n}];"
       }
     },
     {
@@ -88,8 +88,8 @@
       },
       "credentials": {
         "openAiApi": {
-          "id": "H8tvpKZpVTZ3Jn1x",
-          "name": "OpenAi account"
+          "id": "VjPVCOS5dYK7cUgt",
+          "name": "OpenAI account"
         }
       }
     },
@@ -103,7 +103,7 @@
         304
       ],
       "parameters": {
-        "jsCode": "const input = $('Preparar Contexto Ventas').first().json;\nconst aiOutput = $input.first().json;\nlet response = aiOutput.output || aiOutput.text || 'Lo siento, no pude procesar tu consulta de ventas.';\n\n// Detectar [ENVIAR_QR] tag — el sistema enviara la imagen QR al cliente\nconst sendQrImage = response.includes('[ENVIAR_QR]') && !!(input.paymentQrImageUrl);\nif (response.includes('[ENVIAR_QR]')) {\n  response = response.replace('[ENVIAR_QR]', '').trim();\n}\n\n// Detectar confirmacion de venta y parsear JSON estructurado\nconst saleConfirmed = response.trimStart().startsWith('[VENTA_CONFIRMADA]');\nlet saleData = {};\nif (saleConfirmed) {\n  const withoutTag = response.replace('[VENTA_CONFIRMADA]', '').trim();\n  const jsonMatch = withoutTag.match(/^(\\{[\\s\\S]*?\\})(\\s*[\\s\\S]*)$/);\n  if (jsonMatch) {\n    try {\n      saleData = JSON.parse(jsonMatch[1]);\n    } catch(e) {\n      // JSON invalido — continuar sin datos estructurados\n    }\n    response = jsonMatch[2].trim();\n  } else {\n    response = withoutTag;\n  }\n}\n\nlet imagenProductoUrl = null;\ntry {\n  const specificProds = $('Buscar Producto Especifico').first().json.products || [];\n  if (specificProds.length > 0 && specificProds[0].imageUrl) {\n    imagenProductoUrl = specificProds[0].imageUrl;\n  }\n} catch(e) {}\n\nif (!imagenProductoUrl) {\n  try {\n    const allProds = $('Buscar Productos Backend').first().json.products || [];\n    const responseLower = response.toLowerCase();\n    const matched = allProds.find(p =>\n      p.imageUrl && p.name &&\n      (responseLower.includes(p.name.toLowerCase()) ||\n       p.name.toLowerCase().split(' ').some(w => w.length > 3 && responseLower.includes(w)))\n    );\n    if (matched) imagenProductoUrl = matched.imageUrl;\n  } catch(e) {}\n}\n\nreturn [{ json: {\n  response, saleConfirmed, sendQrImage,\n  saleData,\n  imagenProductoUrl,\n  intent: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  tokensEstimated: Math.ceil(((input.message||'') + response).length / 4),\n  phone: input.phone,\n  tenantId: input.tenantId,\n  tenantEmail: input.tenantEmail || '',\n  businessName: input.businessName || '',\n  paymentQrImageUrl: input.paymentQrImageUrl || '',\n  instanceName: input.instanceName,\n  evolutionApiUrl: input.evolutionApiUrl || '',\n  evolutionApiKey: input.evolutionApiKey || '',\n  intent_handled: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  action_taken: saleConfirmed ? 'venta_confirmada' : 'respuesta_generada',\n  metadata: { pushName: input.pushName, original_message: input.message }\n} }];"
+        "jsCode": "const input = $('Preparar Contexto Ventas').first().json;\nconst aiOutput = $input.first().json;\nlet response = aiOutput.output || aiOutput.text || 'Lo siento, no pude procesar tu consulta de ventas.';\n\n// Detectar [ENVIAR_QR] tag — el sistema enviara la imagen QR al cliente\nconst sendQrImage = response.includes('[ENVIAR_QR]') && !!(input.paymentQrImageUrl);\nif (response.includes('[ENVIAR_QR]')) {\n  response = response.replace('[ENVIAR_QR]', '').trim();\n}\n\n// Detectar confirmacion de venta y parsear JSON estructurado\nconst saleConfirmed = response.trimStart().startsWith('[VENTA_CONFIRMADA]');\nlet saleData = {};\nif (saleConfirmed) {\n  const withoutTag = response.replace('[VENTA_CONFIRMADA]', '').trim();\n  const jsonMatch = withoutTag.match(/^(\\{[\\s\\S]*?\\})(\\s*[\\s\\S]*)$/);\n  if (jsonMatch) {\n    try {\n      saleData = JSON.parse(jsonMatch[1]);\n    } catch(e) {\n      // JSON invalido — continuar sin datos estructurados\n    }\n    response = jsonMatch[2].trim();\n  } else {\n    response = withoutTag;\n  }\n}\n\nlet imagenProductoUrl = null;\ntry {\n  const specificProds = $('Buscar Producto Especifico').first().json.products || [];\n  const allProds = $('Buscar Productos Backend').first().json.products || [];\n  const responseLower = response.toLowerCase();\n  // Show image ONLY when full product name appears verbatim in the AI response\n  const findByName = function(prods) {\n    return prods.find(function(p) {\n      if (!p.imageUrl || !p.name) return false;\n      return responseLower.includes(p.name.toLowerCase());\n    });\n  };\n  const matched = findByName(specificProds) || findByName(allProds);\n  if (matched) imagenProductoUrl = matched.imageUrl;\n\n  // Suprimir imagen en modo recoleccion de datos del cliente\n  if (imagenProductoUrl) {\n    const isCollectingData =\n      /[1-4]\\\\.\\\\s*(nombre|cedula|direccion|documento|identidad|talla)/i.test(response) ||\n      (/(necesito|necesitare|proporciona|para.*compra.*datos|datos.*pedido)/i.test(response) && /(cedula|direccion|nombre)/i.test(response));\n    if (isCollectingData) imagenProductoUrl = null;\n  }\n\n  // Suprimir imagen cuando el bot lista el catalogo completo (3+ productos mencionados)\n  if (imagenProductoUrl) {\n    const allProdNames = allProds.map(function(p) { return p.name ? p.name.toLowerCase() : ''; });\n    const mentionCount = allProdNames.filter(function(n) { return n && responseLower.includes(n.split(' ')[0]); }).length;\n    if (mentionCount >= 3) imagenProductoUrl = null;\n  }\n\n  // Suprimir imagen cuando el bot confirma pedido y ya envio QR (evitar doble envio)\n  if (imagenProductoUrl && sendQrImage) imagenProductoUrl = null;\n} catch(e) {}\n\nreturn [{ json: {\n  response, saleConfirmed, sendQrImage,\n  saleData,\n  imagenProductoUrl,\n  intent: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  tokensEstimated: Math.ceil(((input.message||'') + response).length / 4),\n  phone: input.phone,\n  tenantId: input.tenantId,\n  tenantEmail: input.tenantEmail || '',\n  businessName: input.businessName || '',\n  paymentQrImageUrl: input.paymentQrImageUrl || '',\n  instanceName: input.instanceName,\n  evolutionApiUrl: input.evolutionApiUrl || '',\n  evolutionApiKey: input.evolutionApiKey || '',\n  intent_handled: saleConfirmed ? 'sale_confirmed' : 'ventas',\n  action_taken: saleConfirmed ? 'venta_confirmada' : 'respuesta_generada',\n  metadata: { pushName: input.pushName, original_message: input.message }\n} }];"
       }
     },
     {
@@ -192,7 +192,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst prodData = $('Buscar Productos Backend').first().json;\nconst prods = (prodData.products || input.catalog || []).slice(0, 15);\nconst catalogText = prods.length > 0\n  ? prods.map(p => {\n      let line = '• ' + p.name;\n      if (p.category) line += ' [' + p.category + ']';\n      if (p.price) line += ' — $' + Number(p.price).toLocaleString('es-CO');\n      if (p.description) line += ': ' + String(p.description).substring(0, 80);\n      if (p.available === false) line += ' [NO DISPONIBLE]';\n      return line;\n    }).join('\\n')\n  : 'Sin catálogo configurado.';\nconst businessName = input.businessName || 'nuestra tienda';\nconst clientName = input.pushName || 'cliente';\nconst caption = input.message && input.message !== '[imagen]' ? `El cliente escribió: \"${input.message}\". ` : '';\nconst thumbnail = input.imageThumbnailBase64 || '';\nconst systemContent = `Eres un experto en ventas de ${businessName}. Analiza la imagen y responde SOLO en JSON con este formato exacto: {\"producto_catalogo\": \"nombre exacto del producto si coincide con el catálogo o null si no hay coincidencia\", \"respuesta\": \"respuesta cálida y comercial en español\"}`;\nconst userContent = [];\nif (thumbnail) {\n  userContent.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + thumbnail, detail: 'low' } });\n}\nuserContent.push({ type: 'text', text: `${caption}Catálogo disponible:\\n${catalogText}\\n\\nIdentifica si el producto de la imagen coincide con alguno del catálogo y elabora una respuesta comercial.` });\nconst openAiBody = {\n  model: 'gpt-4o',\n  response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: systemContent }, { role: 'user', content: userContent }],\n  max_tokens: 500\n};\nreturn [{ json: { openAiBody, prods, phone: input.phone, tenantId: input.tenantId, instanceName: input.instanceName, pushName: input.pushName, evolutionApiUrl: input.evolutionApiUrl || '', evolutionApiKey: input.evolutionApiKey || '' } }];"
+        "jsCode": "const input = $('Recibir Datos del Router').first().json;\nconst prodData = $('Buscar Productos Backend').first().json;\nconst prods = (prodData.products || input.catalog || []).slice(0, 15);\n\n// Detectar si el cliente esta enviando un comprobante de pago:\n// Caso 1: imagen sin texto (message = '[imagen]') — puede ser comprobante\n// Caso 2: imagen con texto que menciona pago/comprobante/transferencia\nconst caption = input.message && input.message !== '[imagen]' ? input.message : '';\nconst isPaymentReceipt = /comprobante|pago|transferencia|nequi|bancolombia|pague|pagué|ya pag|realice|realicé|hice.*pago|aqui.*pago|pago.*adjunto|soporte.*pago/i.test(caption);\nconst isOnlyImage = !caption || caption === '[imagen]';\n\n// Si es comprobante explícito O imagen sola (contexto de pago activo),\n// pasar directo al agente de ventas como mensaje especial — no Vision\nif (isPaymentReceipt || isOnlyImage) {\n  const paymentMsg = isPaymentReceipt\n    ? caption + ' [IMAGEN_ADJUNTA: comprobante de pago]'\n    : '[IMAGEN_ADJUNTA: el cliente envió una imagen — posiblemente comprobante de pago]';\n  // Retornar señal para que el nodo salte Vision y vaya al agente\n  return [{ json: {\n    skipVision: true,\n    paymentMessage: paymentMsg,\n    openAiBody: null,\n    prods,\n    phone: input.phone,\n    tenantId: input.tenantId,\n    instanceName: input.instanceName,\n    pushName: input.pushName,\n    evolutionApiUrl: input.evolutionApiUrl || '',\n    evolutionApiKey: input.evolutionApiKey || ''\n  } }];\n}\n\n// Imagen que NO es comprobante → analizar con Vision para identificar producto\nconst catalogText = prods.length > 0\n  ? prods.map(p => {\n      let line = '• ' + p.name;\n      if (p.category) line += ' [' + p.category + ']';\n      if (p.price) line += ' — $' + Number(p.price).toLocaleString('es-CO');\n      if (p.description) line += ': ' + String(p.description).substring(0, 80);\n      if (p.available === false) line += ' [NO DISPONIBLE]';\n      return line;\n    }).join('\\n')\n  : 'Sin catálogo configurado.';\nconst businessName = input.businessName || 'nuestra tienda';\nconst thumbnail = input.imageThumbnailBase64 || '';\nconst systemContent = `Eres un experto en ventas de ${businessName}. Analiza la imagen y responde SOLO en JSON con este formato exacto: {\"producto_catalogo\": \"nombre exacto del producto si coincide con el catálogo o null si no hay coincidencia\", \"respuesta\": \"respuesta cálida y comercial en español\"}`;\nconst userContent = [];\nif (thumbnail) {\n  userContent.push({ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + thumbnail, detail: 'low' } });\n}\nuserContent.push({ type: 'text', text: `${caption ? 'El cliente escribió: \"' + caption + '\". ' : ''}Catálogo disponible:\\n${catalogText}\\n\\nIdentifica si el producto de la imagen coincide con alguno del catálogo y elabora una respuesta comercial.` });\nconst openAiBody = {\n  model: 'gpt-4o',\n  response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: systemContent }, { role: 'user', content: userContent }],\n  max_tokens: 500\n};\nreturn [{ json: { skipVision: false, openAiBody, prods, phone: input.phone, tenantId: input.tenantId, instanceName: input.instanceName, pushName: input.pushName, evolutionApiUrl: input.evolutionApiUrl || '', evolutionApiKey: input.evolutionApiKey || '' } }];"
       }
     },
     {
@@ -591,7 +591,7 @@
           "conditions": [
             {
               "id": "cond-img-prod",
-              "leftValue": "={{ $json.imagenProductoUrl }}",
+              "leftValue": "={{ $('Evaluar Respuesta Ventas').first().json.imagenProductoUrl }}",
               "rightValue": "",
               "operator": {
                 "type": "string",
@@ -613,7 +613,7 @@
         200
       ],
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nreturn [{ json: {\n  ...input,\n  mediaBody: {\n    number: String(input.phone),\n    mediatype: 'image',\n    mimetype: 'image/jpeg',\n    caption: '',\n    media: input.imagenProductoUrl,\n    fileName: 'producto.jpg'\n  },\n  evolutionUrl: (input.evolutionApiUrl || '') + '/message/sendMedia/' + (input.instanceName || '')\n} }];",
+        "jsCode": "const input = $('Evaluar Respuesta Ventas').first().json;\nreturn [{ json: {\n  ...input,\n  mediaBody: {\n    number: String(input.phone),\n    mediatype: 'image',\n    mimetype: 'image/jpeg',\n    caption: '',\n    media: input.imagenProductoUrl,\n    fileName: 'producto.jpg'\n  },\n  evolutionUrl: (input.evolutionApiUrl || '') + '/message/sendMedia/' + (input.instanceName || '')\n} }];",
         "mode": "runOnceForAllItems"
       }
     },
@@ -665,7 +665,7 @@
         200
       ],
       "parameters": {
-        "jsCode": "const imageResult = $input.first().json;\nconst ventasData = $('Evaluar Respuesta Ventas').first().json;\nreturn [{ json: { response: ventasData.response, phone: ventasData.phone, tenantId: ventasData.tenantId, intent_handled: 'ventas', action_taken: 'ventas_con_imagen', metadata: ventasData.metadata } }];"
+        "jsCode": "const imageResult = $input.first().json;\nconst ventasData = $('Evaluar Respuesta Ventas').first().json;\nreturn [{ json: { response: ventasData.response, phone: ventasData.phone, tenantId: ventasData.tenantId, intent_handled: 'ventas', action_taken: 'ventas_con_imagen', metadata: ventasData.metadata, imagenProductoUrl: ventasData.imagenProductoUrl || null, paymentQrImageUrl: ventasData.paymentQrImageUrl || null, sendQrImage: ventasData.sendQrImage || false, already_sent: true } }];"
       }
     },
     {
@@ -678,7 +678,7 @@
         400
       ],
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nreturn [{ json: { response: input.response, phone: input.phone, tenantId: input.tenantId, intent_handled: 'ventas', action_taken: 'ventas_texto', metadata: input.metadata } }];"
+        "jsCode": "const input = $('Evaluar Respuesta Ventas').first().json;\nreturn [{ json: { response: input.response, phone: input.phone, tenantId: input.tenantId, intent_handled: 'ventas', action_taken: 'ventas_texto', metadata: input.metadata, imagenProductoUrl: input.imagenProductoUrl || null, paymentQrImageUrl: input.paymentQrImageUrl || null, sendQrImage: input.sendQrImage || false, already_sent: true } }];"
       }
     },
     {
@@ -700,7 +700,7 @@
           "conditions": [
             {
               "id": "c1",
-              "leftValue": "={{ $json.saleConfirmed }}",
+              "leftValue": "={{ $('Evaluar Respuesta Ventas').first().json.saleConfirmed }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -741,51 +741,51 @@
           "parameters": [
             {
               "name": "tenantId",
-              "value": "={{ $json.tenantId }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.tenantId }}"
             },
             {
               "name": "tenantEmail",
-              "value": "={{ $json.tenantEmail }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.tenantEmail }}"
             },
             {
               "name": "businessName",
-              "value": "={{ $json.businessName }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.businessName }}"
             },
             {
               "name": "clientName",
-              "value": "={{ $json.saleData.clientName || $json.metadata.pushName || $json.phone }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.clientName || $('Evaluar Respuesta Ventas').first().json.metadata.pushName || $('Evaluar Respuesta Ventas').first().json.phone }}"
             },
             {
               "name": "clientPhone",
-              "value": "={{ $json.phone }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.phone }}"
             },
             {
               "name": "clientId",
-              "value": "={{ $json.saleData.clientId || \"\" }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.clientId || \"\" }}"
             },
             {
               "name": "productName",
-              "value": "={{ $json.saleData.productName || $json.metadata.original_message || \"\" }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.productName || $('Evaluar Respuesta Ventas').first().json.metadata.original_message || \"\" }}"
             },
             {
               "name": "productDetails",
-              "value": "={{ $json.saleData.productDetails || \"\" }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.productDetails || \"\" }}"
             },
             {
               "name": "quantity",
-              "value": "={{ $json.saleData.quantity || 1 }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.quantity || 1 }}"
             },
             {
               "name": "totalAmount",
-              "value": "={{ $json.saleData.totalAmount || null }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.totalAmount || null }}"
             },
             {
               "name": "paymentMessage",
-              "value": "={{ $json.saleData.paymentMessage || $json.metadata.original_message || \"\" }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.paymentMessage || $('Evaluar Respuesta Ventas').first().json.metadata.original_message || \"\" }}"
             },
             {
               "name": "deliveryAddress",
-              "value": "={{ $json.saleData.clientAddress || \"\" }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.saleData.clientAddress || \"\" }}"
             }
           ]
         },
@@ -798,7 +798,7 @@
       "id": "if-enviar-qr",
       "name": "¿Enviar QR de Pago?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
+      "typeVersion": 2.2,
       "position": [
         1384,
         304
@@ -813,7 +813,7 @@
           "conditions": [
             {
               "id": "cond-qr",
-              "leftValue": "={{ $json.sendQrImage }}",
+              "leftValue": "={{ $('Evaluar Respuesta Ventas').first().json.sendQrImage }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -838,13 +838,13 @@
       ],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.evolutionApiUrl + \"/message/sendMedia/\" + $json.instanceName }}",
+        "url": "={{ $('Evaluar Respuesta Ventas').first().json.evolutionApiUrl + \"/message/sendMedia/\" + $('Evaluar Respuesta Ventas').first().json.instanceName }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.evolutionApiKey }}"
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.evolutionApiKey }}"
             },
             {
               "name": "Content-Type",
@@ -855,7 +855,7 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({ number: String($json.phone), mediatype: \"image\", mimetype: \"image/png\", caption: \"QR de pago\", media: $json.paymentQrImageUrl, fileName: \"qr_pago.png\" }) }}",
+        "body": "={{ JSON.stringify({ number: String($('Evaluar Respuesta Ventas').first().json.phone), mediatype: \"image\", mimetype: \"image/png\", caption: \"QR de pago\", media: $('Evaluar Respuesta Ventas').first().json.paymentQrImageUrl, fileName: \"qr_pago.png\" }) }}",
         "options": {
           "response": {
             "response": {
@@ -864,10 +864,233 @@
           }
         }
       }
+    },
+    {
+      "id": "save-bot-product-image",
+      "name": "Guardar Imagen Producto DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.tenantId }}"
+            },
+            {
+              "name": "contactPhone",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.phone }}"
+            },
+            {
+              "name": "message",
+              "value": ""
+            },
+            {
+              "name": "sender",
+              "value": "bot"
+            },
+            {
+              "name": "type",
+              "value": "image"
+            },
+            {
+              "name": "mediaUrl",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.imagenProductoUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "save-bot-qr-image",
+      "name": "Guardar QR Pago DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        580
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.tenantId }}"
+            },
+            {
+              "name": "contactPhone",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.phone }}"
+            },
+            {
+              "name": "message",
+              "value": ""
+            },
+            {
+              "name": "sender",
+              "value": "bot"
+            },
+            {
+              "name": "type",
+              "value": "image"
+            },
+            {
+              "name": "mediaUrl",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.paymentQrImageUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "guardar-respuesta-texto-db",
+      "name": "Guardar Respuesta Texto DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        304
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId: $json.tenantId, contactPhone: $json.phone, message: $json.response, sender: 'bot', type: 'text' }) }}",
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-es-comprobante",
+      "name": "¿Es Comprobante?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-skip-vision",
+              "leftValue": "={{ $json.skipVision }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "code-set-mensaje-comprobante",
+      "name": "Set Mensaje Comprobante",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1150, -120],
+      "parameters": {
+        "jsCode": "// Comprobante de pago (imagen sola o imagen con texto de pago):\n// Bypass Vision — pasar paymentMessage como messageOverride al agente de ventas\nconst prep = $('Preparar Request Imagen').first().json;\nreturn [{ json: { messageOverride: prep.paymentMessage } }];"
+      }
+    },
+    {
+      "id": "enviar-respuesta-whatsapp-ventas",
+      "name": "Enviar Respuesta WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1350,
+        304
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Evaluar Respuesta Ventas').first().json.evolutionApiUrl + '/message/sendText/' + $('Evaluar Respuesta Ventas').first().json.instanceName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $('Evaluar Respuesta Ventas').first().json.evolutionApiKey }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ number: String($('Evaluar Respuesta Ventas').first().json.phone), text: $('Evaluar Respuesta Ventas').first().json.response }) }}",
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
     "Recibir Datos del Router": {
+      "main": [
+        [
+          {
+            "node": "Cargar Catalogo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cargar Catalogo": {
       "main": [
         [
           {
@@ -955,7 +1178,36 @@
       "main": [
         [
           {
+            "node": "¿Es Comprobante?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es Comprobante?": {
+      "main": [
+        [
+          {
+            "node": "Set Mensaje Comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Analizar Imagen con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Mensaje Comprobante": {
+      "main": [
+        [
+          {
+            "node": "Preparar Contexto Ventas",
             "type": "main",
             "index": 0
           }
@@ -1108,7 +1360,7 @@
       "main": [
         [
           {
-            "node": "¿Enviar QR de Pago?",
+            "node": "Guardar Respuesta Texto DB",
             "type": "main",
             "index": 0
           }
@@ -1149,6 +1401,11 @@
         [
           {
             "node": "Respuesta Ventas Con Imagen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Guardar Imagen Producto DB",
             "type": "main",
             "index": 0
           }
@@ -1207,6 +1464,33 @@
         [
           {
             "node": "¿Venta Confirmada?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Guardar QR Pago DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Respuesta Texto DB": {
+      "main": [
+        [
+          {
+            "node": "Enviar Respuesta WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Respuesta WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "¿Enviar QR de Pago?",
             "type": "main",
             "index": 0
           }

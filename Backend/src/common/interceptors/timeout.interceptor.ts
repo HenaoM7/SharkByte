@@ -10,7 +10,12 @@ import { catchError, timeout } from 'rxjs/operators';
 
 @Injectable()
 export class TimeoutInterceptor implements NestInterceptor {
-  intercept(_context: ExecutionContext, next: CallHandler): Observable<any> {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    const req = context.switchToHttp().getRequest();
+    // SSE — skip timeout, long-lived streams must never be cut
+    if ((req.headers['accept'] || '').includes('text/event-stream')) {
+      return next.handle();
+    }
     return next.handle().pipe(
       timeout(30_000), // 30 segundos máximo por request
       catchError((err) => {

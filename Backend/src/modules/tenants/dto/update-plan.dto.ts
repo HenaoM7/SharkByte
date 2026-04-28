@@ -2,10 +2,10 @@ import { IsIn, IsString } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class UpdatePlanDto {
-  @ApiProperty({ enum: ['free', 'pro', 'enterprise', 'enterprise_annual'] })
+  @ApiProperty({ enum: ['free', 'pro', 'enterprise'] })
   @IsString()
-  @IsIn(['free', 'pro', 'enterprise', 'enterprise_annual'], {
-    message: 'planName debe ser: free, pro, enterprise o enterprise_annual',
+  @IsIn(['free', 'pro', 'enterprise'], {
+    message: 'planName debe ser: free, pro o enterprise',
   })
   planName: string;
 }

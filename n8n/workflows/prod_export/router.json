@@ -303,8 +303,8 @@
       "parameters": {},
       "credentials": {
         "openAiApi": {
-          "id": "H8tvpKZpVTZ3Jn1x",
-          "name": "OpenAi account"
+          "id": "VjPVCOS5dYK7cUgt",
+          "name": "OpenAI account"
         }
       }
     },
@@ -364,7 +364,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "R0MD5wljPcP5C0A5",
+          "value": "ctSgw6mP70AGio9w",
           "mode": "id"
         },
         "options": {}
@@ -541,7 +541,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "yfDNLF5gdNBdIIYW",
+          "value": "ctSgw6mP70AGio9w",
           "mode": "id"
         },
         "options": {}
@@ -560,7 +560,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "soOZnUDDF5fqvlzJ",
+          "value": "ej33BLGVi8jIzne4",
           "mode": "id"
         },
         "workflowInputs": {
@@ -587,7 +587,7 @@
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "bRthlCLSi7lGb325",
+          "value": "ctSgw6mP70AGio9w",
           "mode": "id"
         },
         "options": {}
@@ -623,7 +623,7 @@
         224
       ],
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst config = $('Cargar Config Negocio').first().json;\nconst subResponse = input.response || input.ai_response || 'Lo siento, no pude procesar tu mensaje. Un agente te atenderá pronto.';\n\n// Estimar tokens: ~4 chars por token (heurística básica)\nconst estimatedTokens = Math.ceil(\n  ((config.message || '').length + subResponse.length) / 4\n);\n\nreturn [{\n  json: {\n    phone: config.phone,\n    tenantId: config.tenantId,\n    instanceName: config.instanceName,\n    evolutionApiUrl: config.evolutionApiUrl,\n    evolutionApiKey: config.evolutionApiKey,\n    response_text: subResponse,\n    intent: input.intent || 'unknown',\n    confidence: input.confidence || 0,\n    tokensUsed: estimatedTokens,\n    timestamp: Date.now()\n  }\n}];"
+        "jsCode": "const input = $input.first().json;\nconst config = $('Cargar Config Negocio').first().json;\n\n// Detectar intent clasificado — usar Evaluar Confianza que es quien parsea el intent\nlet classifiedIntent = 'unknown';\ntry { classifiedIntent = $('Evaluar Confianza').first().json.intent || 'unknown'; } catch(e) {}\n\n// Subworkflows self-contained (Ventas) ya enviaron todo internamente.\n// Si el subworkflow no retornó datos de respuesta (retornó respuesta DB {ok:true} o vacío)\n// y el intent fue ventas, marcar como ya enviado para que el Router no envíe nada.\nconst isSelfContainedIntent = ['ventas'].includes(classifiedIntent);\nconst subworkflowReturnedData = !!(input.response || input.ai_response || input.already_sent);\nconst subworkflowReturnedDbResponse = input.ok === true && !input.response && !input.ai_response;\n\nlet alreadySent = input.already_sent || false;\nif (isSelfContainedIntent && (!subworkflowReturnedData || subworkflowReturnedDbResponse)) {\n  alreadySent = true;\n}\n\nconst subResponse = input.response || input.ai_response || '';\n\nconst estimatedTokens = Math.ceil(\n  ((config.message || '').length + subResponse.length) / 4\n);\n\nreturn [{\n  json: {\n    phone: config.phone,\n    tenantId: config.tenantId,\n    instanceName: config.instanceName,\n    evolutionApiUrl: config.evolutionApiUrl,\n    evolutionApiKey: config.evolutionApiKey,\n    response_text: subResponse,\n    intent: input.intent || classifiedIntent,\n    confidence: input.confidence || 0,\n    tokensUsed: estimatedTokens,\n    timestamp: Date.now(),\n    imagenProductoUrl: input.imagenProductoUrl || null,\n    paymentQrImageUrl: input.paymentQrImageUrl || null,\n    sendQrImage: input.sendQrImage || false,\n    already_sent: alreadySent\n  }\n}];"
       }
     },
     {
@@ -782,6 +782,125 @@
       "parameters": {
         "jsCode": "// Este nodo se activa cuando un sub-workflow (Ventas, Soporte, etc.) falla\n// Genera una respuesta de fallback amigable para el cliente\nconst config = $('Cargar Config Negocio').first().json;\nconst pushName = config.pushName || 'cliente';\nconst businessName = config.businessName || 'nuestro equipo';\n\n// Error proveniente del executeWorkflow\nconst errorInfo = $input.first().json || {};\nconst errorMsg = errorInfo.error?.message || 'Error desconocido en sub-workflow';\nconsole.error('[Router] Error en sub-workflow:', errorMsg, '| tenantId:', config.tenantId);\n\n// Respuesta amigable para el usuario\nconst response = `Hola ${pushName}, en este momento estamos teniendo un inconveniente técnico. Un agente de ${businessName} te contactará en breve para asistirte. Disculpa las molestias.`;\n\nreturn [{\n  json: {\n    response,\n    intent: 'error',\n    confidence: 0,\n    error: true,\n    errorMessage: errorMsg\n  }\n}];"
       }
+    },
+    {
+      "id": "save-client-message",
+      "name": "Guardar Mensaje Cliente DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tenantId",
+              "value": "={{ $('Cargar Config Negocio').first().json.tenantId }}"
+            },
+            {
+              "name": "contactPhone",
+              "value": "={{ $('Cargar Config Negocio').first().json.phone }}"
+            },
+            {
+              "name": "contactName",
+              "value": "={{ $('Cargar Config Negocio').first().json.pushName || '' }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $('Cargar Config Negocio').first().json.message || '' }}"
+            },
+            {
+              "name": "sender",
+              "value": "client"
+            },
+            {
+              "name": "type",
+              "value": "={{ $('Cargar Config Negocio').first().json.messageType || 'text' }}"
+            },
+            {
+              "name": "mediaUrl",
+              "value": "={{ $('Cargar Config Negocio').first().json.mediaUrl || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "save-bot-text-message",
+      "name": "Guardar Respuesta Bot DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/internal/conversations/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-key",
+              "value": "3226e5fc55deedbc8dddec221868c8098aec7e7f045515c32127fd643d4abb98"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tenantId: $('Preparar Respuesta').first().json.tenantId, contactPhone: $('Preparar Respuesta').first().json.phone, message: $('Preparar Respuesta').first().json.response_text || '', sender: 'bot', type: 'text' }) }}",
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ya-enviado-check",
+      "name": "¿Ya enviado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "already-sent-cond",
+              "leftValue": "={{ $('Preparar Respuesta').first().json.already_sent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
     }
   ],
   "connections": {
@@ -859,6 +978,11 @@
         [
           {
             "node": "En Horario?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Guardar Mensaje Cliente DB",
             "type": "main",
             "index": 0
           }
@@ -1114,7 +1238,7 @@
       "main": [
         [
           {
-            "node": "Enviar WhatsApp",
+            "node": "¿Ya enviado?",
             "type": "main",
             "index": 0
           }
@@ -1177,6 +1301,29 @@
         [
           {
             "node": "Preparar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ya enviado?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Guardar Respuesta Bot DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Respuesta Bot DB": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
             "type": "main",
             "index": 0
           }

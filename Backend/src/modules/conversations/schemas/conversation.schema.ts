@@ -29,12 +29,25 @@ export class Conversation {
   @Prop({ default: '' })
   assignedTo: string;
 
+  @Prop({ enum: ['general', 'support', 'sales', 'inquiry', 'complaint'], default: 'general' })
+  category: string;
+
   // Cross-entity links
   @Prop({ default: '' })
   dealId: string;
 
   @Prop({ default: '' })
   saleId: string;
+
+  // Sales state machine
+  @Prop({
+    enum: ['browsing', 'interested', 'data_collected', 'payment_pending', 'payment_sent', 'payment_confirmed', 'completed'],
+    default: 'browsing',
+  })
+  salesStage: string;
+
+  @Prop({ type: Object, default: {} })
+  salesData: Record<string, any>;
 }
 
 export const ConversationSchema = SchemaFactory.createForClass(Conversation);
