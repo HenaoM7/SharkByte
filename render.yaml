@@ -5,11 +5,13 @@ services:
     name: sharkbyte-api-dev
     runtime: node
     rootDir: Backend
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: node dist/main.js
     plan: free
     healthCheckPath: /health
     envVars:
+      - key: NODE_VERSION
+        value: "20.17.0"
       - key: NODE_ENV
         value: production
       - key: PORT
@@ -79,12 +81,6 @@ services:
     plan: free
     healthCheckPath: /healthz
     envVars:
-      - key: N8N_BASIC_AUTH_ACTIVE
-        value: "true"
-      - key: N8N_BASIC_AUTH_USER
-        value: admin
-      - key: N8N_BASIC_AUTH_PASSWORD
-        sync: false
       - key: WEBHOOK_URL
         sync: false
       - key: DB_TYPE
@@ -94,7 +90,7 @@ services:
       - key: DB_POSTGRESDB_PORT
         value: "5432"
       - key: DB_POSTGRESDB_DATABASE
-        value: n8n
+        value: sharkbyte_db_dev
       - key: DB_POSTGRESDB_USER
         sync: false
       - key: DB_POSTGRESDB_PASSWORD
@@ -105,8 +101,8 @@ services:
         value: "false"
       - key: N8N_RUNNERS_ENABLED
         value: "true"
-      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
-        value: "true"
+      - key: GENERIC_TIMEZONE
+        value: America/Bogota
       - key: BACKEND_URL
         sync: false
       - key: BACKEND_INTERNAL_KEY
