@@ -19,6 +19,10 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from '../users/users.schema';
 
 const IS_PROD = process.env.NODE_ENV === 'production';
+// Si el frontend está en el mismo dominio raíz (sharkbyteia.com) → SameSite strict
+// Si está en otro dominio (vercel.app, onrender.com, localhost) → SameSite none para cross-origin
+const FRONTEND_URL = process.env.FRONTEND_URL || '';
+const IS_SAME_DOMAIN = FRONTEND_URL.includes('sharkbyteia.com');
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -28,15 +32,19 @@ export class AuthController {
     @InjectModel(User.name) private userModel: Model<User>,
   ) {}
 
-  /** Opciones base para cookies httpOnly. En producción: Secure + SameSite=Strict + dominio raíz */
+  /** Opciones base para cookies httpOnly.
+   *  - mismo dominio prod: Secure + SameSite=strict + domain=.sharkbyteia.com
+   *  - cross-origin prod (Render/Vercel dev): Secure + SameSite=none (sin domain)
+   *  - local dev: SameSite=lax
+   */
   private cookieBase() {
-    return {
-      httpOnly: true,
-      secure: IS_PROD,
-      sameSite: (IS_PROD ? 'strict' : 'lax') as 'strict' | 'lax',
-      path: '/',
-      ...(IS_PROD ? { domain: '.sharkbyteia.com' } : {}),
-    };
+    if (IS_PROD && IS_SAME_DOMAIN) {
+      return { httpOnly: true, secure: true, sameSite: 'strict' as const, path: '/', domain: '.sharkbyteia.com' };
+    }
+    if (IS_PROD && !IS_SAME_DOMAIN) {
+      return { httpOnly: true, secure: true, sameSite: 'none' as const, path: '/' };
+    }
+    return { httpOnly: true, secure: false, sameSite: 'lax' as const, path: '/' };
   }
 
   /** Escribe access_token (15 min) y refresh_token (7 d) como cookies httpOnly */
