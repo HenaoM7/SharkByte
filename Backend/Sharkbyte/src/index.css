@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sb-dark: #022859;
+  --color-sb-primary: #153959;
+  --color-sb-secondary: #174873;
+  --color-sb-neutral: #61788C;
+  --color-sb-bg: #F2F2F2;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+*, *::before, *::after {
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar corporativa sutil */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c8d0d8; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #61788C; }
