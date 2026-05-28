@@ -1,0 +1,162 @@
+services:
+
+  # ─── Backend NestJS ───────────────────────────────────────────────────────────
+  - type: web
+    name: sharkbyte-api-dev
+    runtime: node
+    rootDir: Backend
+    buildCommand: npm install && npm run build
+    startCommand: node dist/main.js
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: INTERNAL_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: EVOLUTION_API_URL
+        sync: false
+      - key: EVOLUTION_API_KEY
+        sync: false
+      - key: EVOLUTION_API_URL_INTERNAL
+        sync: false
+      - key: N8N_WEBHOOK_URL
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.ethereal.email
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_SECURE
+        value: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        value: noreply@sharkbyte.dev
+      - key: DO_SPACES_KEY
+        sync: false
+      - key: DO_SPACES_SECRET
+        sync: false
+      - key: DO_SPACES_ENDPOINT
+        sync: false
+      - key: DO_SPACES_BUCKET
+        sync: false
+      - key: DO_SPACES_CDN_URL
+        sync: false
+      - key: DO_SPACES_FORCE_PATH_STYLE
+        value: false
+      - key: MERCADOPAGO_ACCESS_TOKEN
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_ENCRYPTION_KEY
+        sync: false
+
+  # ─── n8n Workflows ────────────────────────────────────────────────────────────
+  - type: web
+    name: sharkbyte-n8n-dev
+    runtime: docker
+    dockerfilePath: ./infrastructure/docker/n8n.Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: N8N_BASIC_AUTH_ACTIVE
+        value: "true"
+      - key: N8N_BASIC_AUTH_USER
+        value: admin
+      - key: N8N_BASIC_AUTH_PASSWORD
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: DB_TYPE
+        value: postgresdb
+      - key: DB_POSTGRESDB_HOST
+        sync: false
+      - key: DB_POSTGRESDB_PORT
+        value: "5432"
+      - key: DB_POSTGRESDB_DATABASE
+        value: n8n
+      - key: DB_POSTGRESDB_USER
+        sync: false
+      - key: DB_POSTGRESDB_PASSWORD
+        sync: false
+      - key: N8N_DIAGNOSTICS_ENABLED
+        value: "false"
+      - key: N8N_VERSION_NOTIFICATIONS_ENABLED
+        value: "false"
+      - key: N8N_RUNNERS_ENABLED
+        value: "true"
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: "true"
+      - key: BACKEND_URL
+        sync: false
+      - key: BACKEND_INTERNAL_KEY
+        sync: false
+      - key: EVOLUTION_API_URL
+        sync: false
+      - key: EVOLUTION_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # ─── Evolution API (WhatsApp) ─────────────────────────────────────────────────
+  - type: web
+    name: sharkbyte-evolution-dev
+    runtime: docker
+    dockerfilePath: ./infrastructure/docker/evolution.Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: SERVER_URL
+        sync: false
+      - key: AUTHENTICATION_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: "ERROR,WARN"
+      - key: CONFIG_SESSION_PHONE_VERSION
+        value: "2.2413.51"
+      - key: LOG_BAILEYS
+        value: "error"
+      - key: DATABASE_ENABLED
+        value: "true"
+      - key: DATABASE_PROVIDER
+        value: postgresql
+      - key: DATABASE_CONNECTION_URI
+        sync: false
+      - key: DATABASE_SAVE_DATA_INSTANCE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_NEW_MESSAGE
+        value: "true"
+      - key: DATABASE_SAVE_MESSAGE_UPDATE
+        value: "true"
+      - key: DATABASE_SAVE_DATA_CONTACTS
+        value: "true"
+      - key: DATABASE_SAVE_DATA_CHATS
+        value: "true"
+      - key: CACHE_REDIS_ENABLED
+        value: "true"
+      - key: CACHE_REDIS_URI
+        sync: false
+      - key: CACHE_REDIS_PREFIX_KEY
+        value: evolution
+      - key: CACHE_LOCAL_ENABLED
+        value: "false"

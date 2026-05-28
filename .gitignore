@@ -101,6 +101,8 @@ smoke_test_v2.py
 launch_compass.ps1
 debug_runner*.py
 apply_*.py
+sftp_upload.py
+upload_assets.py
 
 # Archivos de auditoría y salidas temporales
 audit_output.txt
@@ -110,6 +112,10 @@ pm2_status.txt
 *.output
 *_full.txt
 *_parsed.json
+
+# PM2 configs temporales
+start-dev.cjs
+ecosystem.config.cjs
 
 # TypeScript build info
 *.tsbuildinfo

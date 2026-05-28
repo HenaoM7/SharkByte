@@ -222,6 +222,7 @@ export class WhatsAppService {
       this.logger.warn(`Delete instance warning for ${instanceName}: ${err?.message}`);
     }
 
+    // Solo limpiar los datos de la instancia — NUNCA tocar isActive, status del tenant ni businessConfig
     await this.tenantModel.updateOne(
       { tenantId },
       { $set: { 'evolutionInstance.instanceName': '', 'evolutionInstance.status': 'disconnected' } },

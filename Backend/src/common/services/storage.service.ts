@@ -19,15 +19,21 @@ export class StorageService {
     const key = this.config.get<string>('DO_SPACES_KEY') || '';
     const secret = this.config.get<string>('DO_SPACES_SECRET') || '';
     const endpoint = this.config.get<string>('DO_SPACES_ENDPOINT');
-    const region = endpoint?.split('.')[0]?.replace('https://', '') || 'nyc3';
+    // Para MinIO local (http://localhost) usar 'us-east-1', para DO Spaces extraer región del endpoint
+    const isLocal = endpoint?.startsWith('http://') ?? false;
+    const region = isLocal ? 'us-east-1' : (endpoint?.split('.')[0]?.replace('https://', '') || 'nyc3');
 
     this.configured = !!(key && key !== 'your_do_spaces_key' && secret && secret !== 'your_do_spaces_secret');
+
+    // forcePathStyle=true requerido para MinIO local y compatibles S3
+    const forcePathStyle = this.config.get<string>('DO_SPACES_FORCE_PATH_STYLE') === 'true'
+      || (endpoint?.startsWith('http://') ?? false);
 
     this.s3 = new S3Client({
       endpoint,
       region,
       credentials: { accessKeyId: key, secretAccessKey: secret },
-      forcePathStyle: false,
+      forcePathStyle,
     });
 
     this.bucket = this.config.get<string>('DO_SPACES_BUCKET') || '';

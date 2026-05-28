@@ -3,7 +3,7 @@ import {
   BadRequestException, HttpException, HttpStatus, Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiHeader, ApiQuery } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { InjectModel } from '@nestjs/mongoose';
@@ -24,6 +24,7 @@ import { Appointment, AppointmentDocument } from './schemas/appointment.schema';
 
 // Endpoints EXCLUSIVOS para n8n — NO usa JWT, usa x-internal-key
 // En producción: Nginx debe bloquear /internal/* desde internet
+@SkipThrottle({ default: true, strict: true })
 @ApiTags('Internal (n8n)')
 @ApiHeader({ name: 'x-internal-key', description: 'Clave interna para n8n', required: true })
 @UseGuards(InternalKeyGuard)

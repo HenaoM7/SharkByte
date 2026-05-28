@@ -150,7 +150,14 @@ export class AuthService {
       this.logger.warn(`No se pudo crear config inicial para ${tenant.tenantId}: ${err?.message}`);
     }
 
-    // 6. Devolver tokens + datos básicos (auto-login)
+    // 6. Auto-activar el tenant en plan free — el bot debe funcionar desde el registro
+    try {
+      await this.tenantsService.activate(tenant.tenantId);
+    } catch (err) {
+      this.logger.warn(`No se pudo auto-activar ${tenant.tenantId}: ${err?.message}`);
+    }
+
+    // 7. Devolver tokens + datos básicos (auto-login)
     const tokens = this.generateTokens(user);
     return {
       ...tokens,
