@@ -74,6 +74,7 @@ services:
         sync: false
 
   # ─── n8n Workflows ────────────────────────────────────────────────────────────
+  # v2: activeVersionId fix 2026-05-29
   - type: web
     name: sharkbyte-n8n-dev
     runtime: docker
