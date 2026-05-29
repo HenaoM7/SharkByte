@@ -105,6 +105,10 @@ services:
         value: America/Bogota
       - key: N8N_SECURE_COOKIE
         value: "false"
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=400"
+      - key: EXECUTIONS_MODE
+        value: regular
       - key: BACKEND_URL
         sync: false
       - key: BACKEND_INTERNAL_KEY
