@@ -74,7 +74,7 @@ services:
         sync: false
 
   # ─── n8n Workflows ────────────────────────────────────────────────────────────
-  # v4: fix workflow IDs produccion -> dev en Router 2026-05-30
+  # v5: fix Docker URLs en sub-workflows Ventas y Escalamiento 2026-05-30
   - type: web
     name: sharkbyte-n8n-dev
     runtime: docker
