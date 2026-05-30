@@ -1,6 +1,10 @@
 # ============================================
-# ECONODO — .gitignore
+# SHARKBYTE — .gitignore
 # ============================================
+
+# Frontend: repo separado (FerchoRC/Econodo) — no rastrear aquí
+Sharkbyte/
+Backend/Sharkbyte/
 
 # Variables de entorno (NUNCA subir al repositorio)
 .env
